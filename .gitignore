@@ -1,0 +1,25 @@
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.xcarchive
+*.dSYM/
+*.dSYM.zip
+*.mobileprovision
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.p8
+*.xcconfig.local
+# Personal notebook content and exports
+*.drawing
+*.papernest
