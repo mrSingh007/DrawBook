@@ -1,6 +1,8 @@
 # Security and privacy
 
-DrawBook has no server, user account, API key, analytics, advertising, or automatic network transfers. The app stores notebooks in its sandbox, with atomic writes and iOS file protection. It excludes notebooks from automatic device backup; users must export editable backups themselves.
+DrawBook has no backend, analytics, advertising, or automatic network transfers. The app stores notebooks in its sandbox, with atomic writes and iOS file protection. It excludes notebooks from automatic device backup; users must export editable backups themselves.
+
+Optional Drawing AI uses a user-provided key for OpenRouter, Ollama Cloud, Claude (Anthropic), or OpenAI. Each key is stored separately in the device’s Keychain. Sending a chat prompt sends it, conversation history, and editable page objects, including typed text, to the selected provider. When **Include handwriting and sketches** is on, the request also includes simplified coordinates and request-scoped IDs for freehand strokes. This setting lets AI remove shared strokes and clear ink. When **Send Page as Image to AI** is on for the selected provider, the agent can request a JPEG rendering of the current page, which includes the paper, any imported PDF page, typed text and shapes, and shared ink only when ink sharing is on. Otherwise, PencilKit files and PDF backgrounds stay local. DrawBook validates the returned edits against the captured page before applying them through the canvas’s undo history.
 
 Imports are treated as untrusted. The app checks file locality/type, size limits, notebook versions and identifiers, relative background filenames, drawing integrity, and shape values. Editable backup export refuses unreadable drawings or PDF backgrounds. These checks do not make arbitrary PDFs or backups inherently trustworthy.
 

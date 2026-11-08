@@ -21,8 +21,9 @@ final class DocumentationScreenshots: XCTestCase {
             NoteShape(kind: .ellipse, frame: CGRect(x: 168, y: 400, width: 160, height: 105), color: green, lineWidth: 4, filled: true, rotation: 30),
             NoteShape(kind: .ellipse, frame: CGRect(x: 387, y: 500, width: 160, height: 105), color: green, lineWidth: 4, filled: true, rotation: -30),
             NoteShape(kind: .line, frame: CGRect(x: 380, y: 313, width: 1, height: 400), color: green, lineWidth: 7),
-            NoteShape(kind: .line, frame: CGRect(x: 275, y: 475, width: 105, height: 85), color: green, lineWidth: 6),
-            NoteShape(kind: .line, frame: CGRect(x: 380, y: 560, width: 100, height: 50), color: green, lineWidth: 6, rotation: -50)
+            NoteShape(kind: .path, frame: CGRect(x: 248, y: 452, width: 132, height: 63), color: green, lineWidth: 6,
+                      points: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 1)]),
+            NoteShape(kind: .line, frame: CGRect(x: 380, y: 552, width: 87, height: 64), color: green, lineWidth: 6)
         ].map { shape in
             var compact = shape
             compact.frame = CGRect(x: (shape.frame.minX - 384) * 0.45 + 384,
@@ -32,24 +33,57 @@ final class DocumentationScreenshots: XCTestCase {
             compact.lineWidth *= 0.65
             return compact
         }, notebookID: journal, pageID: page.id)
-        try await capture(LibraryView().environmentObject(store).tint(Theme.accent).preferredColorScheme(.light), name: "library")
-        try await capture(NavigationStack {
-            NotebookEditor(notebookID: journal)
+        try await capture(LibraryView().environmentObject(store), name: "library", settings: AISettings())
+        let settings = AISettings.screenshotConfiguration()
+        let workspace = editor(NotebookEditor(notebookID: journal), store: store)
+        try await capture(workspace, name: "editor", settings: settings)
+        let chat = DrawingAIChat(screenshotBubbles: [
+            .init(text: "Add two green leaves to the stem.", fromUser: true),
+            .init(text: "I added two green leaves. You can move or resize them in Shapes mode.", fromUser: false)
+        ])
+        // Host the real chat view in the snapshot window so XCTest captures it with the canvas.
+        let workspaceWithChat = workspace.overlay(alignment: .bottomTrailing) {
+            DrawingAIChatView(chat: chat, provider: settings.provider, model: settings.model,
+                              imageInput: settings.imageInput, pageNumber: 1, pageCount: 2,
+                              includeInk: .constant(true), onSend: {}, onClose: {})
+                .frame(width: 400, height: 360)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.accent.opacity(0.16)) }
+                .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+                .padding(.trailing, 12)
+                .padding(.bottom, 118)
+        }
+        try await capture(workspaceWithChat, name: "drawing-ai", settings: settings)
+    }
+
+    private func editor(_ editor: NotebookEditor, store: NotebookStore) -> some View {
+        NavigationStack {
+            editor
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Notebooks", systemImage: "chevron.left") {}
                     }
                 }
-        }.environmentObject(store).tint(Theme.accent).preferredColorScheme(.light), name: "editor")
+        }.environmentObject(store)
     }
 
     @MainActor
-    private func capture<V: View>(_ view: V, name: String) async throws {
+    private func capture<V: View>(_ view: V, name: String, settings: AISettings) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let original = scene.windows.first { $0.isKeyWindow }
         let window = UIWindow(windowScene: scene)
+        defer {
+            window.isHidden = true
+            original?.makeKeyAndVisible()
+        }
         window.frame = CGRect(x: 0, y: 0, width: 1194, height: 834)
-        let host = UIHostingController(rootView: view.environment(\.horizontalSizeClass, .regular).environment(\.locale, Locale(identifier: "en_US")))
+        // These standalone hosts do not inherit the environment from DrawBookApp.
+        let host = UIHostingController(rootView: view
+            .environmentObject(settings)
+            .tint(Theme.accent)
+            .preferredColorScheme(.light)
+            .environment(\.horizontalSizeClass, .regular)
+            .environment(\.locale, Locale(identifier: "en_US")))
         window.rootViewController = host
         window.overrideUserInterfaceStyle = .light
         window.makeKeyAndVisible()
@@ -60,14 +94,12 @@ final class DocumentationScreenshots: XCTestCase {
         host.view.layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2
-        let image = UIGraphicsImageRenderer(bounds: host.view.bounds, format: format).image { _ in
-            host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         let attachment = XCTAttachment(data: try XCTUnwrap(image.pngData()), uniformTypeIdentifier: "public.png")
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        window.isHidden = true
-        original?.makeKeyAndVisible()
     }
 }

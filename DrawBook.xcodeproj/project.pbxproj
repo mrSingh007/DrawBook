@@ -17,11 +17,22 @@
 		C00000000000000000000008 /* PageRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000008 /* PageRenderer.swift */; };
 		C00000000000000000000009 /* ToolControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* ToolControls.swift */; };
 		C00000000000000000000010 /* ShapeRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* ShapeRenderer.swift */; };
+		C00000000000000000000013 /* AIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* AIClient.swift */; };
+		C00000000000000000000014 /* AIPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* AIPageState.swift */; };
+		C00000000000000000000012 /* DrawingAIChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* DrawingAIChat.swift */; };
+		C00000000000000000000011 /* AISettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* AISettings.swift */; };
 		C00000000000000000000101 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000101 /* Assets.xcassets */; };
 		C00000000000000000000102 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000102 /* PrivacyInfo.xcprivacy */; };
 		C00000000000000000000103 /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000103 /* NotebookStoreTests.swift */; };
 		C00000000000000000000105 /* ShapeStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000105 /* ShapeStorageTests.swift */; };
 		C00000000000000000000106 /* ShapeCanvasTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000106 /* ShapeCanvasTests.swift */; };
+		C00000000000000000000107 /* AIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000107 /* AIClientTests.swift */; };
+		C00000000000000000000108 /* AIPageStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000108 /* AIPageStateTests.swift */; };
+		C00000000000000000000015 /* AIJSON.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000015 /* AIJSON.swift */; };
+		C00000000000000000000016 /* AIJSONPatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000016 /* AIJSONPatch.swift */; };
+		C00000000000000000000017 /* AIHandwriting.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* AIHandwriting.swift */; };
+		C00000000000000000000109 /* AIJSONPatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000109 /* AIJSONPatchTests.swift */; };
+		C00000000000000000000110 /* AIHandwritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000110 /* AIHandwritingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,14 +56,25 @@
 		B00000000000000000000008 /* PageRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageRenderer.swift; sourceTree = "<group>"; };
 		B00000000000000000000009 /* ToolControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolControls.swift; sourceTree = "<group>"; };
 		B00000000000000000000010 /* ShapeRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeRenderer.swift; sourceTree = "<group>"; };
+		B00000000000000000000013 /* AIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIClient.swift; sourceTree = "<group>"; };
+		B00000000000000000000014 /* AIPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIPageState.swift; sourceTree = "<group>"; };
+		B00000000000000000000012 /* DrawingAIChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingAIChat.swift; sourceTree = "<group>"; };
+		B00000000000000000000011 /* AISettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettings.swift; sourceTree = "<group>"; };
 		B00000000000000000000101 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00000000000000000000102 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B00000000000000000000103 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000104 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00000000000000000000105 /* ShapeStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeStorageTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000106 /* ShapeCanvasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShapeCanvasTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000107 /* AIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIClientTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000108 /* AIPageStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIPageStateTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000201 /* DrawBook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DrawBook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000202 /* DrawBookTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DrawBookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000015 /* AIJSON.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIJSON.swift; sourceTree = "<group>"; };
+		B00000000000000000000016 /* AIJSONPatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIJSONPatch.swift; sourceTree = "<group>"; };
+		B00000000000000000000017 /* AIHandwriting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIHandwriting.swift; sourceTree = "<group>"; };
+		B00000000000000000000109 /* AIJSONPatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIJSONPatchTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000110 /* AIHandwritingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIHandwritingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -94,6 +116,13 @@
 				B00000000000000000000007 /* DrawingCanvas.swift */,
 				B00000000000000000000008 /* PageRenderer.swift */,
 				B00000000000000000000010 /* ShapeRenderer.swift */,
+				B00000000000000000000013 /* AIClient.swift */,
+				B00000000000000000000014 /* AIPageState.swift */,
+				B00000000000000000000015 /* AIJSON.swift */,
+				B00000000000000000000016 /* AIJSONPatch.swift */,
+				B00000000000000000000017 /* AIHandwriting.swift */,
+				B00000000000000000000012 /* DrawingAIChat.swift */,
+				B00000000000000000000011 /* AISettings.swift */,
 				B00000000000000000000009 /* ToolControls.swift */,
 				B00000000000000000000101 /* Assets.xcassets */,
 				B00000000000000000000102 /* PrivacyInfo.xcprivacy */,
@@ -107,6 +136,10 @@
 			children = (
 				B00000000000000000000103 /* NotebookStoreTests.swift */,
 				B00000000000000000000106 /* ShapeCanvasTests.swift */,
+				B00000000000000000000107 /* AIClientTests.swift */,
+				B00000000000000000000108 /* AIPageStateTests.swift */,
+				B00000000000000000000109 /* AIJSONPatchTests.swift */,
+				B00000000000000000000110 /* AIHandwritingTests.swift */,
 				B00000000000000000000105 /* ShapeStorageTests.swift */,
 			);
 			path = DrawBookTests;
@@ -230,6 +263,13 @@
 				C00000000000000000000007 /* DrawingCanvas.swift in Sources */,
 				C00000000000000000000008 /* PageRenderer.swift in Sources */,
 				C00000000000000000000010 /* ShapeRenderer.swift in Sources */,
+				C00000000000000000000013 /* AIClient.swift in Sources */,
+				C00000000000000000000014 /* AIPageState.swift in Sources */,
+				C00000000000000000000015 /* AIJSON.swift in Sources */,
+				C00000000000000000000016 /* AIJSONPatch.swift in Sources */,
+				C00000000000000000000017 /* AIHandwriting.swift in Sources */,
+				C00000000000000000000012 /* DrawingAIChat.swift in Sources */,
+				C00000000000000000000011 /* AISettings.swift in Sources */,
 				C00000000000000000000009 /* ToolControls.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -240,6 +280,10 @@
 			files = (
 				C00000000000000000000103 /* NotebookStoreTests.swift in Sources */,
 				C00000000000000000000106 /* ShapeCanvasTests.swift in Sources */,
+				C00000000000000000000107 /* AIClientTests.swift in Sources */,
+				C00000000000000000000108 /* AIPageStateTests.swift in Sources */,
+				C00000000000000000000109 /* AIJSONPatchTests.swift in Sources */,
+				C00000000000000000000110 /* AIHandwritingTests.swift in Sources */,
 				C00000000000000000000105 /* ShapeStorageTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

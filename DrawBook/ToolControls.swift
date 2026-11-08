@@ -18,6 +18,7 @@ struct ToolControls: View {
     @State private var showingSize = false
     @State private var showingColor = false
     @State private var showingShapes = false
+    @State private var textEdit: TextEdit?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -56,13 +57,22 @@ struct ToolControls: View {
                         shapeOptions.padding(18).frame(width: 310)
                             .presentationCompactAdaptation(.popover)
                     }
+                    toolButton("Add Text", symbol: "text.badge.plus", selected: false) {
+                        mode = .shapes
+                        textEdit = TextEdit(target: nil)
+                    }
+                    if mode == .shapes, let selectedText {
+                        toolButton("Edit Text", symbol: "character.cursor.ibeam", selected: false) {
+                            textEdit = TextEdit(target: selectedText)
+                        }
+                    }
                     if mode == .shapes && controller.selectedShape != nil {
                         Button(role: .destructive) { controller.deleteSelectedShape() } label: {
                             Image(systemName: "trash").frame(width: 34, height: 44)
                         }
                         .foregroundStyle(.red)
-                        .accessibilityLabel("Delete selected shape")
-                        .help("Delete selected shape")
+                            .accessibilityLabel("Delete selected object")
+                            .help("Delete selected object")
                     }
                     toolButton("Ruler", symbol: "ruler", selected: controller.rulerActive && mode == .ink) {
                         if mode != .ink { mode = .ink; applyBrush() }
@@ -84,7 +94,7 @@ struct ToolControls: View {
                             .overlay { Circle().stroke(Theme.secondary.opacity(0.35), lineWidth: 1) }
                             .frame(width: 25, height: 25).frame(width: 36, height: 44)
                     }
-                    .accessibilityLabel(mode == .shapes ? "Shape color" : "Brush color")
+                    .accessibilityLabel(colorTitle)
                     .disabled(!canStyle)
                     .popover(isPresented: $showingColor, arrowEdge: .top) {
                         colorOptions.padding(18).frame(width: 280)
@@ -121,13 +131,41 @@ struct ToolControls: View {
         .onChange(of: inkColor) { _, _ in if mode == .ink { applyBrush() } }
         .onChange(of: inkWidth) { _, _ in if mode == .ink { applyBrush() } }
         .onChange(of: eraserWidth) { _, _ in if mode == .ink && brush == .eraser { applyBrush() } }
+        .sheet(item: $textEdit) { edit in
+            TextEditSheet(target: edit.target, controller: controller) { text in
+                if let target = edit.target {
+                    guard controller.selectedShape?.id == target.id,
+                          controller.selectedShape?.text == target.text else { return }
+                    controller.updateSelectedText(text)
+                } else {
+                    controller.addText(text, color: RGBAColor(uiColor: UIColor(shapeColor)))
+                }
+            }
+        }
     }
 
     private var separator: some View { Divider().frame(height: 22).padding(.horizontal, 3) }
     private var canStyle: Bool { mode == .shapes || (mode == .ink && brush.isInk) }
     private var isErasing: Bool { mode == .ink && brush == .eraser }
     private var canResize: Bool { canStyle || isErasing }
-    private var sizeTitle: String { mode == .shapes ? "Shape line width" : isErasing ? "Eraser diameter" : "Brush size" }
+    private var selectedText: NoteShape? { controller.selectedShape.flatMap { $0.kind == .text ? $0 : nil } }
+    private var isStylingText: Bool { mode == .shapes && selectedText != nil }
+    private var colorTitle: String {
+        if isStylingText { return "Text color" }
+        return mode == .shapes ? "Shape color" : "Brush color"
+    }
+    private var sizeTitle: String {
+        if isStylingText { return "Font size" }
+        return mode == .shapes ? "Shape line width" : isErasing ? "Eraser diameter" : "Brush size"
+    }
+    private var sizeRange: ClosedRange<Double> {
+        if isStylingText { return 6...144 }
+        return isErasing ? 4...80 : 1...32
+    }
+    private var sizePresets: [Double] {
+        if isStylingText { return [12, 18, 24, 36, 48] }
+        return isErasing ? [8, 16, 24, 48, 80] : [1, 3, 6, 12, 24]
+    }
 
     private func brushButton(_ item: Brush, action: @escaping () -> Void) -> some View {
         let selected = mode == .laser ? item == .laser : mode == .ink && brush == item
@@ -185,18 +223,24 @@ struct ToolControls: View {
                 Spacer()
                 Text(activeWidth.wrappedValue, format: .number.precision(.fractionLength(0...1))).monospacedDigit()
             }
-            Slider(value: activeWidth, in: isErasing ? 4...80 : 1...32, step: 0.5)
+            Slider(value: activeWidth, in: sizeRange, step: 0.5)
                 .accessibilityLabel(sizeTitle)
             HStack(spacing: 6) {
-                ForEach(isErasing ? [8.0, 16, 24, 48, 80] : [1.0, 3, 6, 12, 24], id: \.self) { width in
+                ForEach(sizePresets, id: \.self) { width in
                     Button { activeWidth.wrappedValue = width } label: {
-                        Circle().fill(isErasing ? Theme.accent.opacity(0.12) : Theme.ink)
-                            .overlay { if isErasing { Circle().stroke(Theme.accent, lineWidth: 1) } }
-                            .frame(width: max(3, min(width, 32)), height: max(3, min(width, 32)))
-                            .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
-                            .background(abs(activeWidth.wrappedValue - width) < 0.1 ? Theme.accent.opacity(0.12) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 8))
-                            .contentShape(Rectangle())
+                        Group {
+                            if isStylingText {
+                                Text(width, format: .number).font(.subheadline.monospacedDigit())
+                            } else {
+                                Circle().fill(isErasing ? Theme.accent.opacity(0.12) : Theme.ink)
+                                    .overlay { if isErasing { Circle().stroke(Theme.accent, lineWidth: 1) } }
+                                    .frame(width: max(3, min(width, 32)), height: max(3, min(width, 32)))
+                            }
+                        }
+                        .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
+                        .background(abs(activeWidth.wrappedValue - width) < 0.1 ? Theme.accent.opacity(0.12) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).accessibilityLabel("\(Int(width)) points")
                 }
@@ -219,7 +263,7 @@ struct ToolControls: View {
 
     private var colorOptions: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(mode == .shapes ? "Shape color" : "Brush color").font(.headline)
+            Text(colorTitle).font(.headline)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
                 ForEach(Array(palette.enumerated()), id: \.offset) { item in
                     Button {
@@ -244,20 +288,29 @@ struct ToolControls: View {
 
     private var shapeOptions: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(controller.selectedShape == nil ? "Add a shape" : "Edit shape").font(.headline)
-            Picker("Shape", selection: selectedKind) {
-                ForEach(ShapeKind.allCases) { item in Label(item.title, systemImage: item.symbol).tag(item) }
+            if let selected = controller.selectedShape, !selected.kind.isPrimitive {
+                Text("Edit \(selected.kind.title.lowercased())").font(.headline)
+                if selected.kind == .path && selected.closed {
+                    Toggle("Fill path", isOn: selectedFill)
+                }
+            } else {
+                Text(controller.selectedShape == nil ? "Add a shape" : "Edit shape").font(.headline)
+                Picker("Shape", selection: selectedKind) {
+                    ForEach(ShapeKind.allCases.filter(\.isPrimitive)) { item in
+                        Label(item.title, systemImage: item.symbol).tag(item)
+                    }
+                }
+                .pickerStyle(.menu)
+                Toggle("Fill shape", isOn: selectedFill)
+                    .disabled(selectedKind.wrappedValue == .line || selectedKind.wrappedValue == .arrow)
+                Button("Add \(selectedKind.wrappedValue.title.lowercased())", systemImage: "plus") {
+                    controller.addShape(kind: selectedKind.wrappedValue,
+                                        color: RGBAColor(uiColor: UIColor(selectedColor.wrappedValue)),
+                                        lineWidth: selectedWidth.wrappedValue, filled: selectedFill.wrappedValue)
+                    showingShapes = false
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .pickerStyle(.menu)
-            Toggle("Fill shape", isOn: selectedFill)
-                .disabled(selectedKind.wrappedValue == .line || selectedKind.wrappedValue == .arrow)
-            Button("Add \(selectedKind.wrappedValue.title.lowercased())", systemImage: "plus") {
-                controller.addShape(kind: selectedKind.wrappedValue,
-                                    color: RGBAColor(uiColor: UIColor(selectedColor.wrappedValue)),
-                                    lineWidth: selectedWidth.wrappedValue, filled: selectedFill.wrappedValue)
-                showingShapes = false
-            }
-            .buttonStyle(.borderedProminent)
             if let selected = controller.selectedShape {
                 Divider()
                 HStack {
@@ -267,15 +320,23 @@ struct ToolControls: View {
                 }
                 .labelStyle(.iconOnly).font(.title3)
                 Button("Duplicate", systemImage: "plus.square.on.square") { controller.duplicateSelectedShape(); showingShapes = false }
-                Button("Delete shape", systemImage: "trash", role: .destructive) { controller.deleteSelectedShape(); showingShapes = false }
+                Button("Delete \(selected.kind.title.lowercased())", systemImage: "trash", role: .destructive) {
+                    controller.deleteSelectedShape()
+                    showingShapes = false
+                }
             }
-            Text("Drag a shape to move it. Drag its blue corner to resize.")
+            Text("Drag an object to move it. Drag its blue corner to resize.")
                 .font(.caption).foregroundStyle(Theme.secondary)
         }
     }
 
     private var activeColor: Binding<Color> { mode == .shapes ? selectedColor : $inkColor }
-    private var activeWidth: Binding<Double> { mode == .shapes ? selectedWidth : isErasing ? $eraserWidth : $inkWidth }
+    private var activeWidth: Binding<Double> {
+        if isStylingText {
+            return Binding(get: { selectedText?.fontSize ?? 24 }, set: { controller.updateSelectedShape(fontSize: $0) })
+        }
+        return mode == .shapes ? selectedWidth : isErasing ? $eraserWidth : $inkWidth
+    }
     private var selectedKind: Binding<ShapeKind> {
         Binding(get: { controller.selectedShape?.kind ?? shapeKind }, set: { shapeKind = $0; controller.updateSelectedShape(kind: $0) })
     }
@@ -305,6 +366,77 @@ struct ToolControls: View {
     private struct BrushSettings {
         var color: Color
         var width: Double
+    }
+
+    private struct TextEdit: Identifiable {
+        let id = UUID()
+        let target: NoteShape?
+    }
+
+    private struct TextEditSheet: View {
+        @Environment(\.dismiss) private var dismiss
+        @FocusState private var editingText: Bool
+        @State private var text: String
+        @ObservedObject private var controller: CanvasController
+        let target: NoteShape?
+        let onSave: (String) -> Void
+
+        init(target: NoteShape?, controller: CanvasController, onSave: @escaping (String) -> Void) {
+            self.target = target
+            self.controller = controller
+            self.onSave = onSave
+            _text = State(initialValue: target?.text ?? "")
+        }
+
+        /// Text taller than the page would be clipped on the canvas and in exports.
+        private var tooTall: Bool {
+            !ShapeRenderer.textFitsPage(text, width: target?.frame.width ?? ShapeRenderer.newTextWidth,
+                                        fontSize: target?.fontSize ?? NoteShape(kind: .text, frame: .zero).fontSize)
+        }
+
+        private var targetChanged: Bool {
+            guard let target else { return false }
+            return controller.selectedShape?.id != target.id || controller.selectedShape?.text != target.text
+        }
+
+        var body: some View {
+            NavigationStack {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextEditor(text: $text)
+                        .accessibilityLabel("Page text")
+                        .focused($editingText)
+                        .padding(6)
+                        .scrollContentBackground(.hidden)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    if targetChanged {
+                        Text("The selected text changed. Reopen it to edit the latest version.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if text.utf8.count > 4_000 {
+                        Text("This text is too long. Shorten it before saving.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if tooTall {
+                        Text("This text is taller than the page. Shorten it or split it into several text boxes.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .padding()
+                .navigationTitle(target == nil ? "Add Text" : "Edit Text")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(target == nil ? "Add" : "Save") {
+                            onSave(text)
+                            dismiss()
+                        }
+                        .disabled(targetChanged || text.utf8.count > 4_000 || tooTall ||
+                                  text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .onAppear { editingText = true }
+        }
     }
 
     private enum Brush: String, CaseIterable, Identifiable {

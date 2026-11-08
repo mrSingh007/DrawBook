@@ -7,8 +7,17 @@ enum ShapeRenderer {
         let frame = shape.frame.standardized
         let path: UIBezierPath
         switch shape.kind {
-        case .rectangle:
+        case .rectangle, .text:
             path = UIBezierPath(rect: frame)
+        case .path:
+            path = UIBezierPath()
+            for (index, point) in shape.points.enumerated() {
+                let vertex = CGPoint(x: frame.minX + point.x * frame.width,
+                                     y: frame.minY + point.y * frame.height)
+                if index == 0 { path.move(to: vertex) }
+                else { path.addLine(to: vertex) }
+            }
+            if shape.closed { path.close() }
         case .ellipse:
             path = UIBezierPath(ovalIn: frame)
         case .triangle:
@@ -34,15 +43,60 @@ enum ShapeRenderer {
             }
         }
         if shape.rotation != 0 {
-            let transform = CGAffineTransform(translationX: frame.midX, y: frame.midY)
-                .rotated(by: shape.rotation * .pi / 180)
-                .translatedBy(x: -frame.midX, y: -frame.midY)
-            path.apply(transform)
+            path.apply(rotation(for: shape))
         }
         path.lineWidth = shape.lineWidth
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
         return path
+    }
+
+    private static func rotation(for shape: NoteShape) -> CGAffineTransform {
+        let frame = shape.frame.standardized
+        return CGAffineTransform(translationX: frame.midX, y: frame.midY)
+            .rotated(by: shape.rotation * .pi / 180)
+            .translatedBy(x: -frame.midX, y: -frame.midY)
+    }
+
+    private static let textDrawingOptions: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+
+    /// Width of a text box made with Add Text.
+    static let newTextWidth: CGFloat = 320
+
+    /// Whether the text box's full text fits within the page height at its width and font size.
+    static func textFitsPage(_ shape: NoteShape) -> Bool {
+        textFitsPage(shape.text ?? "", width: shape.frame.width, fontSize: shape.fontSize)
+    }
+
+    static func textFitsPage(_ text: String, width: CGFloat, fontSize: Double) -> Bool {
+        textHeight(text, width: width, fontSize: fontSize) <= PageRenderer.pageSize.height
+    }
+
+    static func textHeight(_ text: String, width: CGFloat, fontSize: Double) -> CGFloat {
+        guard width.isFinite, width > 0, (6...144).contains(fontSize) else { return 0 }
+        let font = UIFont.systemFont(ofSize: fontSize)
+        let bounds = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: textDrawingOptions,
+            attributes: [.font: font],
+            context: nil
+        )
+        return ceil(max(font.lineHeight, bounds.height))
+    }
+
+    private static func drawText(_ shape: NoteShape, in context: CGContext) {
+        guard let text = shape.text else { return }
+        let frame = shape.frame.standardized
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.concatenate(rotation(for: shape))
+        context.clip(to: frame)
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+        (text as NSString).draw(with: frame, options: textDrawingOptions, attributes: [
+            .font: UIFont.systemFont(ofSize: shape.fontSize),
+            .foregroundColor: shape.color.uiColor
+        ], context: nil)
     }
 
     /// Converts normalized mask coordinates into the current, rotated page space.
@@ -67,8 +121,11 @@ enum ShapeRenderer {
 
     private static func paintedPath(for shape: NoteShape) -> CGPath {
         let path = path(for: shape).cgPath
-        let stroke = path.copy(strokingWithWidth: shape.lineWidth, lineCap: .round, lineJoin: .round, miterLimit: 10)
-        var painted = shape.filled && shape.kind != .line && shape.kind != .arrow ? stroke.union(path) : stroke
+        var painted = path
+        if shape.kind != .text {
+            let stroke = path.copy(strokingWithWidth: shape.lineWidth, lineCap: .round, lineJoin: .round, miterLimit: 10)
+            painted = shape.fillsPath ? stroke.union(path) : stroke
+        }
         for mask in shape.erasureMasks { painted = painted.subtracting(maskPath(mask, shape: shape)) }
         return painted
     }
@@ -184,7 +241,7 @@ enum ShapeRenderer {
         context.clip(to: PageRenderer.pageBounds)
         for shape in shapes {
             context.saveGState()
-            if let remaining = erasureSession?.remainingPath(for: shape) {
+            if shape.kind != .text, let remaining = erasureSession?.remainingPath(for: shape) {
                 // During a rubber gesture, reuse the already-cut geometry rather
                 // than recreating an offscreen layer and replaying every mask.
                 context.setFillColor(shape.color.uiColor.cgColor)
@@ -196,17 +253,18 @@ enum ShapeRenderer {
             // Each shape gets its own isolated layer: holes reveal lower ink,
             // shapes, ruled paper, and PDF backgrounds without clearing them.
             if !shape.erasureMasks.isEmpty { context.beginTransparencyLayer(auxiliaryInfo: nil) }
-            let path = path(for: shape)
-            context.setStrokeColor(shape.color.uiColor.cgColor)
-            context.setFillColor(shape.color.uiColor.cgColor)
-            context.setLineWidth(shape.lineWidth)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.addPath(path.cgPath)
-            if shape.filled && shape.kind != .line && shape.kind != .arrow {
-                context.drawPath(using: .fillStroke)
+            if shape.kind == .text {
+                drawText(shape, in: context)
             } else {
-                context.strokePath()
+                let path = path(for: shape)
+                context.setStrokeColor(shape.color.uiColor.cgColor)
+                context.setFillColor(shape.color.uiColor.cgColor)
+                context.setLineWidth(shape.lineWidth)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+                context.addPath(path.cgPath)
+                if shape.fillsPath { context.drawPath(using: .fillStroke) }
+                else { context.strokePath() }
             }
             if !shape.erasureMasks.isEmpty {
                 context.setBlendMode(.destinationOut)

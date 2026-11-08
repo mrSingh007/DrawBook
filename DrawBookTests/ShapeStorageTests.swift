@@ -33,19 +33,24 @@ final class ShapeStorageTests: XCTestCase {
         shape = ShapeRenderer.erasing(shape, from: CGPoint(x: shape.frame.midX, y: shape.frame.midY),
                                       to: CGPoint(x: shape.frame.midX + 20, y: shape.frame.midY), width: 20)
         XCTAssertFalse(shape.erasureMasks.isEmpty)
-        try store.saveShapes([shape], notebookID: id, pageID: page.id)
+        let text = NoteShape(kind: .text, frame: CGRect(x: 50, y: 60, width: 300, height: 90),
+                             color: .red, text: "Heading\nDetails", fontSize: 30)
+        let path = NoteShape(kind: .path, frame: CGRect(x: 250, y: 300, width: 90, height: 90),
+                             points: [.zero, CGPoint(x: 0.5, y: 1), CGPoint(x: 1, y: 0)], closed: true)
+        let objects = [shape, text, path]
+        try store.saveShapes(objects, notebookID: id, pageID: page.id)
 
         let reopened = NotebookStore(rootURL: root)
-        XCTAssertEqual(try reopened.shapes(notebookID: id, pageID: page.id), [shape])
-        XCTAssertEqual(reopened.notebook(id: id)?.pages.first?.shapes, [shape])
+        XCTAssertEqual(try reopened.shapes(notebookID: id, pageID: page.id), objects)
+        XCTAssertEqual(reopened.notebook(id: id)?.pages.first?.shapes, objects)
         let duplicate = try XCTUnwrap(reopened.duplicateNotebook(id: id))
-        XCTAssertEqual(try reopened.shapes(notebookID: duplicate, pageID: page.id), [shape])
+        XCTAssertEqual(try reopened.shapes(notebookID: duplicate, pageID: page.id), objects)
         let backup = try reopened.exportBackup(notebookID: id)
         defer { try? FileManager.default.removeItem(at: backup) }
         let restored = try XCTUnwrap(reopened.importBackup(from: backup))
         XCTAssertNotEqual(restored, id)
-        XCTAssertEqual(try reopened.shapes(notebookID: restored, pageID: page.id), [shape])
-        XCTAssertEqual(try reopened.shapes(notebookID: id, pageID: page.id), [shape])
+        XCTAssertEqual(try reopened.shapes(notebookID: restored, pageID: page.id), objects)
+        XCTAssertEqual(try reopened.shapes(notebookID: id, pageID: page.id), objects)
     }
 
     @MainActor
@@ -140,6 +145,27 @@ final class ShapeStorageTests: XCTestCase {
         let page = try XCTUnwrap(document.page(at: 0))
         XCTAssertGreaterThan(try redPixelCount(page.thumbnail(of: CGSize(width: 768, height: 1024), for: .mediaBox)), 15_000)
         XCTAssertTrue(try store.drawingForExport(notebookID: id, pageID: pageID).strokes.isEmpty)
+    }
+
+    @MainActor
+    func testTypedTextRendersInPNGAndPDF() throws {
+        let root = testRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = NotebookStore(rootURL: root)
+        let id = try XCTUnwrap(store.createNotebook(title: "Text exports", cover: .gold, paper: .blank))
+        let pageID = try XCTUnwrap(store.notebook(id: id)?.pages.first?.id)
+        let text = NoteShape(kind: .text, frame: CGRect(x: 100, y: 100, width: 250, height: 120),
+                             color: .red, text: "Project plan\nNext steps", fontSize: 32)
+        try store.saveShapes([text], notebookID: id, pageID: pageID)
+
+        let png = try PageRenderer.png(drawing: PKDrawing(), paper: .blank, backgroundURL: nil, shapes: [text])
+        defer { try? FileManager.default.removeItem(at: png.deletingLastPathComponent()) }
+        XCTAssertGreaterThan(try redPixelCount(XCTUnwrap(UIImage(contentsOfFile: png.path))), 300)
+        let pdf = try PageRenderer.pdf(notebook: XCTUnwrap(store.notebook(id: id)), store: store)
+        defer { try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent()) }
+        let document = try XCTUnwrap(PDFDocument(url: pdf))
+        let page = try XCTUnwrap(document.page(at: 0))
+        XCTAssertGreaterThan(try redPixelCount(page.thumbnail(of: CGSize(width: 768, height: 1024), for: .mediaBox)), 100)
     }
 
     @MainActor

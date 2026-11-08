@@ -50,9 +50,10 @@ struct NotePage: Codable, Identifiable, Equatable {
 }
 
 enum ShapeKind: String, Codable, CaseIterable, Identifiable {
-    case rectangle, ellipse, triangle, line, arrow
+    case rectangle, ellipse, triangle, line, arrow, text, path
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+    var isPrimitive: Bool { self != .text && self != .path }
     var symbol: String {
         switch self {
         case .rectangle: return "rectangle"
@@ -60,6 +61,8 @@ enum ShapeKind: String, Codable, CaseIterable, Identifiable {
         case .triangle: return "triangle"
         case .line: return "line.diagonal"
         case .arrow: return "arrow.up.right"
+        case .text: return "textformat"
+        case .path: return "scribble"
         }
     }
 }
@@ -114,17 +117,24 @@ struct NoteShape: Codable, Identifiable, Equatable {
     var filled = false
     var rotation: Double = 0
     var erasureMasks: [ShapeErasureMask] = []
+    var text: String?
+    var fontSize: Double = 24
+    /// Vertices normalized to the unrotated frame, so they move and resize with it.
+    var points: [CGPoint] = []
+    var closed = false
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, frame, color, lineWidth, filled, rotation, erasureMasks
+        case id, kind, frame, color, lineWidth, filled, rotation, erasureMasks, text, fontSize, points, closed
     }
 
     init(id: UUID = UUID(), kind: ShapeKind, frame: CGRect, color: RGBAColor = .black,
          lineWidth: Double = 3, filled: Bool = false, rotation: Double = 0,
-         erasureMasks: [ShapeErasureMask] = []) {
+         erasureMasks: [ShapeErasureMask] = [], text: String? = nil, fontSize: Double = 24,
+         points: [CGPoint] = [], closed: Bool = false) {
         self.id = id; self.kind = kind; self.frame = frame; self.color = color
         self.lineWidth = lineWidth; self.filled = filled; self.rotation = rotation
-        self.erasureMasks = erasureMasks
+        self.erasureMasks = erasureMasks; self.text = text; self.fontSize = fontSize
+        self.points = points; self.closed = closed
     }
 
     init(from decoder: Decoder) throws {
@@ -137,6 +147,34 @@ struct NoteShape: Codable, Identifiable, Equatable {
         filled = try values.decode(Bool.self, forKey: .filled)
         rotation = try values.decode(Double.self, forKey: .rotation)
         erasureMasks = try values.decodeIfPresent([ShapeErasureMask].self, forKey: .erasureMasks) ?? []
+        text = try values.decodeIfPresent(String.self, forKey: .text)
+        fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 24
+        points = try values.decodeIfPresent([CGPoint].self, forKey: .points) ?? []
+        closed = try values.decodeIfPresent(Bool.self, forKey: .closed) ?? false
+    }
+
+    var fillsPath: Bool {
+        switch kind {
+        case .rectangle, .ellipse, .triangle: return filled
+        case .path: return filled && closed
+        case .line, .arrow, .text: return false
+        }
+    }
+
+    var hasValidContent: Bool {
+        switch kind {
+        case .text:
+            guard let text else { return false }
+            return text.utf8.count <= 4_000
+                && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (6...144).contains(fontSize)
+        case .path:
+            guard (2...101).contains(points.count), let first = points.first else { return false }
+            return points.allSatisfy { (0...1).contains($0.x) && (0...1).contains($0.y) }
+                && points.contains { $0 != first }
+        case .rectangle, .ellipse, .triangle, .line, .arrow:
+            return true
+        }
     }
 }
 

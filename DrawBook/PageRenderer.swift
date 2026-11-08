@@ -123,6 +123,51 @@ enum PageRenderer {
         }
     }
 
+    /// A JPEG of the page for Drawing AI, in page points (1 pixel = 1 point at scale 1).
+    /// The optional grid labels page coordinates every 100 points so the model can place edits.
+    static func aiSnapshot(drawing: PKDrawing, paper: PaperStyle, backgroundURL: URL?, shapes: [NoteShape],
+                           grid: Bool, scale: CGFloat = 1, quality: CGFloat = 0.7) -> Data? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let rendered = UIGraphicsImageRenderer(size: pageSize, format: format).image { output in
+            drawBackground(paper: paper, backgroundURL: backgroundURL, in: output.cgContext)
+            drawing.image(from: pageBounds, scale: max(scale, 1)).draw(in: pageBounds)
+            ShapeRenderer.draw(shapes, in: output.cgContext)
+            if grid { drawCoordinateGrid(in: output.cgContext) }
+        }
+        return rendered.jpegData(compressionQuality: quality)
+    }
+
+    private static func drawCoordinateGrid(in context: CGContext) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        let color = UIColor(red: 0.1, green: 0.45, blue: 0.95, alpha: 1)
+        context.setStrokeColor(color.withAlphaComponent(0.28).cgColor)
+        context.setLineWidth(0.75)
+        context.setLineDash(phase: 0, lengths: [4, 4])
+        for x in stride(from: CGFloat(100), to: pageSize.width, by: 100) {
+            context.move(to: CGPoint(x: x, y: 0))
+            context.addLine(to: CGPoint(x: x, y: pageSize.height))
+        }
+        for y in stride(from: CGFloat(100), to: pageSize.height, by: 100) {
+            context.move(to: CGPoint(x: 0, y: y))
+            context.addLine(to: CGPoint(x: pageSize.width, y: y))
+        }
+        context.strokePath()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: color.withAlphaComponent(0.8),
+            .backgroundColor: UIColor.white.withAlphaComponent(0.75)
+        ]
+        for x in stride(from: CGFloat(100), to: pageSize.width, by: 100) {
+            NSString(string: "\(Int(x))").draw(at: CGPoint(x: x + 2, y: 2), withAttributes: attributes)
+        }
+        for y in stride(from: CGFloat(100), to: pageSize.height, by: 100) {
+            NSString(string: "\(Int(y))").draw(at: CGPoint(x: 2, y: y + 2), withAttributes: attributes)
+        }
+    }
+
     static func validateBackground(_ url: URL?) throws {
         guard let url else { return }
         guard let document = CGPDFDocument(url as CFURL), document.numberOfPages > 0 else {

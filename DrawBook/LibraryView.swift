@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var aiSettings: AISettings
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selection: UUID?
     @State private var compactColumn: NavigationSplitViewColumn = .detail
@@ -12,6 +13,7 @@ struct LibraryView: View {
     @State private var creating = false
     @State private var importing = false
     @State private var showingHelp = false
+    @State private var showingAISettings = false
     @State private var renameID: UUID?
     @State private var renameTitle = ""
     @State private var deleteID: UUID?
@@ -56,11 +58,12 @@ struct LibraryView: View {
                         .buttonStyle(.plain)
                     }
                 }
+                aiConfiguration
                 Spacer()
                 VStack(alignment: .leading, spacing: 12) {
                     Image(systemName: "internaldrive").font(.title2)
                     Text("A little space, just for you.").font(.system(.title3, design: .serif))
-                    Text("Your notebooks live on this device. No accounts. No subscriptions.")
+                    Text("Your notebooks are stored on this device. Writing and drawing work offline without a DrawBook account.")
                         .font(.caption).foregroundStyle(Theme.secondary)
                     Button("About & pencil help", systemImage: "questionmark.circle") { showingHelp = true }
                         .font(.caption.weight(.medium))
@@ -74,16 +77,33 @@ struct LibraryView: View {
             .background(Theme.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 290)
             .toolbar(.hidden, for: .navigationBar)
+            // SwiftUI only honours sidebar-toggle removal on the sidebar column. While a notebook
+            // is open the editor supplies its own toggle so the leading buttons never reorder.
+            .toolbar(removing: selection == nil ? nil : .sidebarToggle)
         } detail: {
             NavigationStack {
                 Group {
                     if let selection, store.notebook(id: selection) != nil {
                         NotebookEditor(notebookID: selection)
                             .id(selection)
-                            .toolbar(removing: .sidebarToggle)
                             .toolbar {
+                                // Fixed order in both states: [sidebar toggle] [← Back].
                                 ToolbarItem(placement: .topBarLeading) {
-                                    Button("Notebooks", systemImage: "chevron.left") { self.selection = nil }
+                                    Button {
+                                        withAnimation {
+                                            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                                        }
+                                    } label: {
+                                        Label(columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar",
+                                              systemImage: "sidebar.left")
+                                    }
+                                }
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button { self.selection = nil } label: {
+                                        Label("Back", systemImage: "arrow.left")
+                                            .labelStyle(.titleAndIcon)
+                                    }
+                                    .accessibilityLabel("Back to Notebooks")
                                 }
                             }
                     } else {
@@ -101,6 +121,9 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showingHelp) { HelpSheet() }
+        .sheet(isPresented: $showingAISettings) {
+            AIConfigurationSheet(settings: aiSettings)
+        }
         .sheet(item: $shareFile) { ShareSheet(urls: $0.urls) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, UTType(exportedAs: "com.local.papernest.notebook")]) { result in
             switch result {
@@ -129,6 +152,32 @@ struct LibraryView: View {
         .alert("Something needs attention", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
+    }
+
+    private var aiConfiguration: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("AI").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(Theme.secondary)
+            Button { showingAISettings = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("AI configuration").font(.subheadline.weight(.medium))
+                        Text(aiSettings.isConfigured ? "\(aiSettings.provider.title) · \(aiSettings.model)" : "Choose an AI provider")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(13)
+                .background(.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private var library: some View {
@@ -234,6 +283,111 @@ struct LibraryView: View {
     }
 }
 
+private struct AIConfigurationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let settings: AISettings
+    @State private var provider: AIProvider
+    @State private var apiKey: String
+    @State private var model: String
+    @State private var imageInput: Bool
+    @State private var saveError: String?
+
+    init(settings: AISettings) {
+        self.settings = settings
+        _provider = State(initialValue: settings.provider)
+        _apiKey = State(initialValue: settings.apiKey)
+        _model = State(initialValue: settings.model)
+        _imageInput = State(initialValue: settings.imageInput)
+    }
+
+    private var providerSelection: Binding<AIProvider> {
+        Binding(get: { provider }, set: { selected in
+            guard provider != selected else { return }
+            let configuration = settings.configuration(for: selected)
+            apiKey = configuration.apiKey
+            model = configuration.model
+            imageInput = configuration.imageInput
+            saveError = nil
+            provider = selected
+        })
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Provider", selection: providerSelection) {
+                        ForEach(AIProvider.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                Section {
+                    SecureField("API key", text: $apiKey, prompt: Text("Enter your \(provider.title) API key"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("\(provider.title) API key")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Drawing AI uses your provider account and may incur provider charges. Your key is stored in Keychain. Clear it and save to turn off AI chat.")
+                        Link("Get a \(provider.title) API key", destination: provider.keyURL)
+                    }
+                }
+
+                Section {
+                    TextField("Model ID", text: $model, prompt: Text(provider.defaultModel))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if model != provider.defaultModel {
+                        Button("Use default model") { model = provider.defaultModel }
+                    }
+                } header: {
+                    Text("\(provider.title) model")
+                } footer: {
+                    Text("Default model: \(provider.defaultModel). You can enter another model ID supported by this provider.")
+                }
+
+                Section {
+                    Toggle(isOn: $imageInput) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Send Page as Image to AI")
+                            Text("Make sure your model supports image input (vision).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text("Drawing AI can request an image of the current page, including the paper and any imported PDF. Your handwriting and sketches appear in the image only when Include handwriting and sketches is on.")
+                }
+
+                if let saveError {
+                    Text(saveError).font(.callout).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("AI configuration")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        do {
+                            try settings.save(provider: provider, apiKey: apiKey, model: model, imageInput: imageInput)
+                            dismiss()
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private enum LibraryFilter: String, CaseIterable, Identifiable {
     case all = "My notebooks", recent = "Recently edited", pdfs = "PDF notebooks"
     var id: String { rawValue }
@@ -333,6 +487,11 @@ struct HelpSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Privacy") {
+                    Link(destination: URL(string: "https://github.com/mrSingh007/DrawBook/blob/main/docs/PRIVACY.md")!) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
+                }
                 Section("Make yourself at home") {
                     Label("Handwrite, sketch, and annotate PDFs.", systemImage: "pencil.tip")
                     Label("Choose an illustrated pen nib for ballpoint, monoline, highlighter, fountain pen, pencil, watercolor, or crayon. Reed pen is available on iPadOS 26 or later. Tap the color circle or size button to adjust the selected tool.", systemImage: "paintpalette")
@@ -351,13 +510,14 @@ struct HelpSheet: View {
                     Text("If your pen does not leave a mark, enable Touch drawing in the page menu. Touch drawing also accepts fingers and capacitive styluses; palm rejection is less effective in that mode.")
                     Text("Pressure, tilt, palm rejection, and buttons depend on your iPad and pen. A stylus without pressure sensing cannot provide pressure-sensitive strokes.")
                 }
-                Section("Your data stays here") {
-                    Text("No accounts, servers, analytics, ads, or automatic cloud sync. Notebooks are stored inside this app and excluded from automatic device backup. Sharing only happens when you choose an export destination.")
+                Section("Storage and sharing") {
+                    Text("Notebooks are stored inside this app and excluded from automatic device backup. You choose when to export and share a notebook.")
+                    Text("Optional Drawing AI sends your chat and editable content from the current page directly to your chosen provider. With handwriting sharing on, this includes recognized text and simplified strokes. With page images on, it can include a rendered image of an imported PDF page. Your provider’s data handling and retention settings apply.")
                     Text("Use Export editable backup to keep handwriting editable. PNG and PDF are for sharing and are flattened. Keep backups in On My iPad, an external drive, or another location you choose.")
                     Text("Deleting the app deletes its local notebooks. Export backups before deleting, changing signing identity, or reinstalling as a different app.")
                 }
                 Section("Built for a quieter kind of note-taking") {
-                    Text("DrawBook is an independent, offline notebook inspired by paper and simple tools. It includes no AI or subscription features.")
+                    Text("DrawBook is an independent notebook inspired by paper and simple tools. Writing and drawing work offline.")
                     Label("Free and open source under the MIT License.", systemImage: "curlybraces")
                 }
             }

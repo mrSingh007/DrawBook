@@ -16,6 +16,8 @@ enum PageEntryPosition: Equatable { case top, bottom }
 final class CanvasController: ObservableObject {
     fileprivate weak var host: PaperCanvasHost?
     fileprivate var preferredTool: PKTool?
+    /// The last ink brush chosen in the toolbar, kept while the eraser or lasso is active.
+    private(set) var currentInk = PKInkingTool(.pen, color: .black, width: 3)
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published private(set) var selectedShape: NoteShape?
@@ -35,12 +37,17 @@ final class CanvasController: ObservableObject {
         host?.finishShapeGesture()
         return host?.shapes
     }
+    func applyAIPage(_ changed: AIPageContent, replacing original: AIPageContent, pageID: UUID) -> Bool {
+        guard let host, host.pageID == pageID else { return false }
+        return host.applyAIPage(changed, replacing: original)
+    }
     func focus() { host?.focusCanvas() }
     func discardTransientMarks() { host?.clearLaserTrails() }
 
     func configureInk(type: PKInkingTool.InkType, color: UIColor, width: CGFloat) {
         let tool = PKInkingTool(type, color: color, width: max(0.5, min(width, 40)))
         preferredTool = tool
+        currentInk = tool
         host?.applyTool(tool)
     }
     func useEraser(width: CGFloat = 24) {
@@ -60,9 +67,13 @@ final class CanvasController: ObservableObject {
     func addShape(kind: ShapeKind, color: RGBAColor, lineWidth: Double, filled: Bool) {
         host?.addShape(kind: kind, color: color, lineWidth: lineWidth, filled: filled)
     }
-    func updateSelectedShape(kind: ShapeKind? = nil, color: RGBAColor? = nil, lineWidth: Double? = nil, filled: Bool? = nil, rotation: Double? = nil) {
-        host?.updateSelectedShape(kind: kind, color: color, lineWidth: lineWidth, filled: filled, rotation: rotation)
+    func updateSelectedShape(kind: ShapeKind? = nil, color: RGBAColor? = nil, lineWidth: Double? = nil,
+                             filled: Bool? = nil, rotation: Double? = nil, fontSize: Double? = nil) {
+        host?.updateSelectedShape(kind: kind, color: color, lineWidth: lineWidth, filled: filled,
+                                  rotation: rotation, fontSize: fontSize)
     }
+    func addText(_ text: String, color: RGBAColor) { host?.addText(text, color: color) }
+    func updateSelectedText(_ text: String) { host?.updateSelectedText(text) }
     func deleteSelectedShape() { host?.deleteSelectedShape() }
     func duplicateSelectedShape() { host?.duplicateSelectedShape() }
 
@@ -177,6 +188,8 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     private var pageScrollCandidate: PageTurnDirection?
     private var pageScrollStartZoom: CGFloat = 1
     private var pageScrollStartOffset = CGPoint.zero
+    private var pageScrollStartedAtTop = false
+    private var pageScrollStartedAtBottom = false
     private var pageScrollGeneration = 0
     private var nativeToolActive = false
     private var lastWidth: CGFloat = 0
@@ -391,12 +404,20 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         pageScrollCandidate = nil
         pageScrollStartZoom = canvas.zoomScale
         pageScrollStartOffset = canvas.contentOffset
-        pageScrollActive = !nativeToolActive && gestureStartShapes == nil && eraserStartDrawing == nil && !canvas.isZooming
+        // Decide edges now: a slight pinch during the swipe moves the zoomed edge offsets.
+        pageScrollStartedAtTop = canvas.contentOffset.y <= pageTopOffset + Self.pageEdgeSlack
+        pageScrollStartedAtBottom = canvas.contentOffset.y >= pageBottomOffset - Self.pageEdgeSlack
+        pageScrollActive = !nativeToolActive && gestureStartShapes == nil && eraserStartDrawing == nil
     }
+    /// Two-finger pans nearly always pinch a little too, so only a real zoom cancels a page turn.
+    private var pageScrollZoomChanged: Bool {
+        abs(canvas.zoomScale / pageScrollStartZoom - 1) > Self.pageTurnZoomTolerance
+    }
+    private static let pageTurnZoomTolerance: CGFloat = 0.04
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         positionPaper()
         guard pageScrollActive else { return }
-        guard !nativeToolActive, !canvas.isZooming, abs(canvas.zoomScale - pageScrollStartZoom) < 0.001 else {
+        guard !nativeToolActive, !pageScrollZoomChanged else {
             pageScrollActive = false
             pageScrollCandidate = nil
             return
@@ -404,15 +425,38 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         let vertical = canvas.contentOffset.y - pageScrollStartOffset.y
         let horizontal = canvas.contentOffset.x - pageScrollStartOffset.x
         guard abs(vertical) > abs(horizontal) else { pageScrollCandidate = nil; return }
-        if canGoNext && canvas.contentOffset.y >= pageBottomOffset + 48 { pageScrollCandidate = .next }
-        else if canGoPrevious && canvas.contentOffset.y <= pageTopOffset - 48 { pageScrollCandidate = .previous }
+        if canGoNext && canvas.contentOffset.y >= pageBottomOffset + Self.pageTurnOverscroll { pageScrollCandidate = .next }
+        else if canGoPrevious && canvas.contentOffset.y <= pageTopOffset - Self.pageTurnOverscroll { pageScrollCandidate = .previous }
         else { pageScrollCandidate = nil }
+    }
+    /// Rubber-banding halves the finger travel, so a modest pull past the edge is enough.
+    private static let pageTurnOverscroll: CGFloat = 28
+    /// A drag that starts already resting on an edge turns the page after this much finger travel.
+    private static let pageTurnEdgeTravel: CGFloat = 44
+    /// How close to an edge counts as resting on it (pixel rounding, deceleration settling).
+    private static let pageEdgeSlack: CGFloat = 8
+    /// Pan direction for a drag that began resting on the top/bottom edge, if it pulled far
+    /// enough (or flicked fast enough) away from the page. Covers short two-finger swipes
+    /// whose rubber-band overscroll never reaches `pageTurnOverscroll`.
+    private func edgeSwipeDirection() -> PageTurnDirection? {
+        let pan = canvas.panGestureRecognizer
+        // Measure in the host: the scroll view's own coordinates move with the content.
+        let travel = pan.translation(in: self)
+        let velocity = pan.velocity(in: self)
+        guard abs(travel.y) > abs(travel.x) else { return nil }
+        let flick = abs(velocity.y) > 500 && abs(travel.y) > 20
+        let far = abs(travel.y) > Self.pageTurnEdgeTravel
+        guard far || flick else { return nil }
+        // Finger moving up (negative y) pulls past the bottom edge → next page.
+        if travel.y < 0, pageScrollStartedAtBottom, canGoNext, canvas.contentOffset.y >= pageBottomOffset - Self.pageEdgeSlack { return .next }
+        if travel.y > 0, pageScrollStartedAtTop, canGoPrevious, canvas.contentOffset.y <= pageTopOffset + Self.pageEdgeSlack { return .previous }
+        return nil
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         guard pageScrollActive else { return }
         pageScrollActive = false
-        guard let direction = pageScrollCandidate, !nativeToolActive, !canvas.isZooming,
-              abs(canvas.zoomScale - pageScrollStartZoom) < 0.001 else { pageScrollCandidate = nil; return }
+        guard !nativeToolActive, !pageScrollZoomChanged,
+              let direction = pageScrollCandidate ?? edgeSwipeDirection() else { pageScrollCandidate = nil; return }
         pageScrollCandidate = nil
         let generation = pageScrollGeneration
         // Let UIKit finish releasing the old page's pan gesture before SwiftUI
@@ -424,8 +468,10 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         }
     }
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        pageScrollActive = false
-        pageScrollCandidate = nil
+        if pageScrollActive && pageScrollZoomChanged {
+            pageScrollActive = false
+            pageScrollCandidate = nil
+        }
         centerPaper()
         positionPaper()
     }
@@ -446,19 +492,53 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
 
     // MARK: Editable vector shapes
     func addShape(kind: ShapeKind, color: RGBAColor, lineWidth: Double, filled: Bool) {
+        guard kind.isPrimitive else { return }
         let center = documentPoint(CGPoint(x: bounds.midX, y: bounds.midY))
         let frame = bounded(CGRect(x: center.x - 90, y: center.y - 65, width: 180, height: 130))
         let shape = NoteShape(kind: kind, frame: frame, color: color, lineWidth: lineWidth, filled: filled)
         replaceShapesWithUndo(shapes + [shape], selected: shape.id, name: "Add Shape")
     }
-    func updateSelectedShape(kind: ShapeKind? = nil, color: RGBAColor? = nil, lineWidth: Double? = nil, filled: Bool? = nil, rotation: Double? = nil) {
+    func addText(_ text: String, color: RGBAColor) {
+        let center = documentPoint(CGPoint(x: bounds.midX, y: bounds.midY))
+        var shape = NoteShape(kind: .text, frame: CGRect(x: center.x - 160, y: center.y, width: ShapeRenderer.newTextWidth, height: 30),
+                              color: color, text: text)
+        guard shape.hasValidContent, ShapeRenderer.textFitsPage(shape) else { return }
+        fitText(&shape)
+        replaceShapesWithUndo(shapes + [shape], selected: shape.id, name: "Add Text")
+    }
+    func updateSelectedText(_ text: String) {
+        guard let index = shapes.firstIndex(where: { $0.id == selectedID && $0.kind == .text }),
+              shapes[index].text != text else { return }
+        var changed = shapes
+        changed[index].text = text
+        guard changed[index].hasValidContent, ShapeRenderer.textFitsPage(changed[index]) else { return }
+        fitText(&changed[index])
+        replaceShapesWithUndo(changed, selected: selectedID, name: "Edit Text")
+    }
+    private func fitText(_ shape: inout NoteShape) {
+        guard let text = shape.text else { return }
+        shape.frame.size.height = ShapeRenderer.textHeight(text, width: shape.frame.width, fontSize: shape.fontSize)
+        shape.frame = bounded(shape.frame)
+    }
+    func updateSelectedShape(kind: ShapeKind? = nil, color: RGBAColor? = nil, lineWidth: Double? = nil,
+                             filled: Bool? = nil, rotation: Double? = nil, fontSize: Double? = nil) {
         guard let index = shapes.firstIndex(where: { $0.id == selectedID }) else { return }
         var changed = shapes
-        if let kind { changed[index].kind = kind }
+        if let kind, kind.isPrimitive, changed[index].kind.isPrimitive, changed[index].kind != kind {
+            changed[index].kind = kind
+            // A flat line becomes a closed shape with two positive sides, which storage requires.
+            changed[index].frame = bounded(changed[index].frame, kind: kind)
+        }
         if let color { changed[index].color = color }
         if let lineWidth, lineWidth.isFinite { changed[index].lineWidth = min(40, max(0.5, lineWidth)) }
         if let filled { changed[index].filled = filled }
         if let rotation, rotation.isFinite { changed[index].rotation = rotation.truncatingRemainder(dividingBy: 360) }
+        if let fontSize, (6...144).contains(fontSize), changed[index].kind == .text {
+            changed[index].fontSize = fontSize
+            // A larger font must not push text past the page, where it would be clipped.
+            guard ShapeRenderer.textFitsPage(changed[index]) else { return }
+            fitText(&changed[index])
+        }
         guard changed != shapes else { return }
         replaceShapesWithUndo(changed, selected: selectedID, name: "Change Shape")
     }
@@ -469,8 +549,39 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     func duplicateSelectedShape() {
         guard var copy = selectedShape else { return }
         copy.id = UUID()
-        copy.frame = bounded(copy.frame.offsetBy(dx: 24, dy: 24))
+        copy.frame = bounded(copy.frame.offsetBy(dx: 24, dy: 24), kind: copy.kind)
         replaceShapesWithUndo(shapes + [copy], selected: copy.id, name: "Duplicate Shape")
+    }
+    fileprivate func applyAIPage(_ changed: AIPageContent, replacing original: AIPageContent) -> Bool {
+        guard changed != original else { return true }
+        // Ink IDs refer to the captured drawing. A gesture still in progress
+        // can change the page even before PencilKit publishes its first stroke.
+        guard !nativeToolActive, eraserStartDrawing == nil, gestureStartShapes == nil,
+              shapes == original.shapes,
+              canvas.drawing.dataRepresentation() == original.drawing.dataRepresentation() else { return false }
+        let selection = selectedID.flatMap { id in changed.shapes.contains { $0.id == id } ? id : nil }
+        replaceAIPageWithUndo(changed, selected: selection)
+        return true
+    }
+    private func replaceAIPageWithUndo(_ changed: AIPageContent, selected: UUID?) {
+        let previous = AIPageContent(drawing: canvas.drawing, shapes: shapes)
+        let oldSelection = selectedID
+        canvas.historyUndoManager.registerUndo(withTarget: self) {
+            $0.replaceAIPageWithUndo(previous, selected: oldSelection)
+        }
+        canvas.historyUndoManager.setActionName("AI Canvas Edits")
+        if changed.drawing != previous.drawing {
+            nativeErasureOrigin = nil
+            canvas.replaceRenderedInk(with: changed.drawing)
+            onChange?(changed.drawing)
+        }
+        if changed.shapes != previous.shapes {
+            shapes = changed.shapes
+            select(selected)
+            onShapesChange?(shapes)
+        }
+        overlay.setNeedsDisplay()
+        controller?.refreshHistory()
     }
     private func replaceShapesWithUndo(_ changed: [NoteShape], selected: UUID?, name: String) {
         let previous = shapes
@@ -503,13 +614,15 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         CGPoint(x: (point.x + canvas.contentOffset.x) / canvas.zoomScale,
                 y: (point.y + canvas.contentOffset.y) / canvas.zoomScale)
     }
-    private func bounded(_ frame: CGRect) -> CGRect {
+    private func bounded(_ frame: CGRect, kind: ShapeKind = .rectangle) -> CGRect {
         // Use the signed size and original anchor. CGRect's standardized
         // dimensions/minimums would flip a shape after dragging past its origin.
         let requestedWidth = frame.size.width
         let requestedHeight = frame.size.height
-        let width = max(requestedWidth == 0 ? 0 : 20, min(requestedWidth, PageRenderer.pageSize.width))
-        let height = max(requestedHeight == 0 ? 0 : 20, min(requestedHeight, PageRenderer.pageSize.height))
+        let minimumSide: CGFloat = kind == .path ? 1 : 20
+        let allowsFlatSide = kind == .line || kind == .arrow
+        let width = max(allowsFlatSide && requestedWidth == 0 ? 0 : minimumSide, min(requestedWidth, PageRenderer.pageSize.width))
+        let height = max(allowsFlatSide && requestedHeight == 0 ? 0 : minimumSide, min(requestedHeight, PageRenderer.pageSize.height))
         return CGRect(x: min(max(frame.origin.x, 0), PageRenderer.pageSize.width - width),
                       y: min(max(frame.origin.y, 0), PageRenderer.pageSize.height - height), width: width, height: height)
     }
@@ -563,7 +676,10 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
             var changed = original
             let dx = point.x - gestureStartPoint.x, dy = point.y - gestureStartPoint.y
             let frame = original[index].frame
-            changed[index].frame = bounded(gestureIsResize ? CGRect(x: frame.minX, y: frame.minY, width: frame.width + dx, height: frame.height + dy) : frame.offsetBy(dx: dx, dy: dy))
+            let requested = gestureIsResize
+                ? CGRect(x: frame.minX, y: frame.minY, width: frame.width + dx, height: frame.height + dy)
+                : frame.offsetBy(dx: dx, dy: dy)
+            changed[index].frame = bounded(requested, kind: changed[index].kind)
             shapes = changed
             publishSelection()
             overlay.setNeedsDisplay()
@@ -824,6 +940,45 @@ final class PageCanvasView: PKCanvasView {
         self.drawing = drawing
         nativeEraserUndoManager.enableUndoRegistration()
         historyUndoManager.enableUndoRegistration()
+    }
+    /// Replaces the ink and forces PencilKit to redraw. After a programmatic replacement
+    /// (for example, while the AI popover holds focus), PencilKit can keep showing cached
+    /// tiles of removed strokes until the next touch.
+    func replaceRenderedInk(with drawing: PKDrawing) {
+        // Going through an empty drawing makes PencilKit drop every cached tile
+        // instead of diffing the stroke lists.
+        setDrawingWithoutUndo(PKDrawing())
+        layoutIfNeeded()
+        setDrawingWithoutUndo(drawing)
+        refreshRenderedInk()
+        // Tiles are rendered asynchronously, so repeat once the new drawing has been
+        // picked up, unless the user has already replaced it.
+        let expected = drawing.dataRepresentation()
+        for delay in [0.0, 0.15] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.window != nil,
+                      self.drawing.dataRepresentation() == expected else { return }
+                self.refreshRenderedInk()
+            }
+        }
+    }
+    /// A zoom round trip makes PencilKit re-tile. Each step needs its own layout pass;
+    /// two zoom changes in the same pass cancel out and nothing gets redrawn.
+    func refreshRenderedInk() {
+        func invalidate(_ view: UIView) {
+            view.setNeedsDisplay()
+            view.layer.setNeedsDisplay()
+            view.subviews.forEach(invalidate)
+        }
+        invalidate(self)
+        let zoom = zoomScale, offset = contentOffset
+        // Nudge toward the inside of the allowed range so the change isn't clamped away.
+        let nudged = zoom * 1.001 <= maximumZoomScale ? zoom * 1.001 : zoom * 0.999
+        setZoomScale(nudged, animated: false)
+        layoutIfNeeded()
+        setZoomScale(zoom, animated: false)
+        setContentOffset(offset, animated: false)
+        layoutIfNeeded()
     }
 }
 

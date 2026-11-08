@@ -3,9 +3,11 @@ import PencilKit
 
 struct NotebookEditor: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var aiSettings: AISettings
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("fingerDrawing") private var fingerDrawing = false
+    @AppStorage("drawingAIIncludeInk") private var includeInkInAI = true
     @StateObject private var canvasController = CanvasController()
     @State private var currentPageID: UUID?
     @State private var pageEntryPosition: PageEntryPosition = .top
@@ -24,6 +26,11 @@ struct NotebookEditor: View {
     @State private var confirmingDelete = false
     @State private var rename = false
     @State private var title = ""
+    @StateObject private var aiChat = DrawingAIChat()
+    @State private var showAIChat = false
+    /// Bumped when a page's saved content changes, so only that page's thumbnail re-renders.
+    @State private var pageRevisions: [UUID: Int] = [:]
+    @State private var thumbnails = ThumbnailCache()
     let notebookID: UUID
 
     private var notebook: Notebook? { store.notebook(id: notebookID) }
@@ -57,12 +64,16 @@ struct NotebookEditor: View {
                         mode: mode,
                         onShapesChange: { changed in shapesChanged(changed, pageID: page.id) },
                         canGoPrevious: pageIndex > 0,
-                        canGoNext: pageIndex + 1 < (notebook?.pages.count ?? 1),
+                        // Swiping past the last page's bottom edge adds a new page.
+                        canGoNext: true,
                         entryPosition: pageEntryPosition,
                         onPageTurn: { direction in turnPage(direction, from: page.id) }
                     )
                     .id(page.id)
                     .accessibilityLabel("Drawing page \(pageIndex + 1)")
+                    .overlay(alignment: .bottomTrailing) {
+                        if aiSettings.isConfigured { aiButton(pageID: page.id) }
+                    }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -105,7 +116,11 @@ struct NotebookEditor: View {
         .onAppear {
             if currentPageID == nil, let first = notebook?.pages.first { loadPage(first.id) }
         }
-        .onDisappear { _ = flush() }
+        .onDisappear { aiChat.cancel(); _ = flush() }
+        .onChange(of: aiSettings.provider) { _, _ in
+            showAIChat = false
+            aiChat.newThread()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 canvasController.discardTransientMarks()
@@ -131,8 +146,58 @@ struct NotebookEditor: View {
         }
     }
 
+    private func aiButton(pageID: UUID) -> some View {
+        Button {
+            showAIChat = true
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(Theme.accent.opacity(0.2)) }
+                .shadow(color: .black.opacity(0.09), radius: 5, y: 2)
+        }
+        .buttonStyle(.plain)
+        .padding(14)
+        .accessibilityLabel("Drawing AI")
+        .popover(isPresented: $showAIChat, arrowEdge: .bottom) {
+            DrawingAIChatView(chat: aiChat, provider: aiSettings.provider,
+                              model: aiSettings.model, imageInput: aiSettings.imageInput,
+                              pageNumber: pageIndex + 1, pageCount: notebook?.pages.count ?? 1,
+                              includeInk: $includeInkInAI) {
+                guard currentPageID == pageID, pageLoadError == nil else { return }
+                guard flush() else {
+                    aiChat.errorMessage = "Retry saving the page before asking AI to edit it."
+                    return
+                }
+                let original = AIPageContent(drawing: drawing, shapes: shapes)
+                let info = AIPageState.PageInfo(number: pageIndex + 1, count: notebook?.pages.count ?? 1,
+                                                paper: page?.paper ?? .ruled,
+                                                hasPDFBackground: page?.backgroundFile != nil,
+                                                pen: canvasController.currentInk,
+                                                backgroundURL: store.backgroundURL(notebookID: notebookID, pageID: pageID))
+                aiChat.send(provider: aiSettings.provider, apiKey: aiSettings.apiKey,
+                            model: aiSettings.model, page: original, info: info, includeInk: includeInkInAI,
+                            imageInput: aiSettings.imageInput,
+                            selectedObjectID: canvasController.selectedShape?.id) { changed in
+                    guard currentPageID == pageID,
+                          canvasController.applyAIPage(changed, replacing: original, pageID: pageID) else {
+                        return .pageChanged
+                    }
+                    // Both layers are saved by flush; report a failure of either so the chat
+                    // doesn't present a half-saved edit as done.
+                    guard changed == original || flush() else { return .saveFailed }
+                    return .applied
+                }
+            } onClose: {
+                showAIChat = false
+            }
+        }
+    }
+
     private var footer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button { previousPage() } label: { Image(systemName: "chevron.left") }
                 .disabled(pageIndex == 0).accessibilityLabel("Previous page")
             Text("\(pageIndex + 1) / \(notebook?.pages.count ?? 1)")
@@ -150,19 +215,20 @@ struct NotebookEditor: View {
                     .foregroundStyle(Theme.secondary)
             }
             if sizeClass != .compact {
-                Divider().frame(height: 14)
+                Divider().frame(height: 12)
                 Label(fingerDrawing ? "Touch drawing on" : "Pencil mode", systemImage: fingerDrawing ? "hand.draw" : "pencil.tip")
                     .foregroundStyle(Theme.secondary)
             }
         }
-        .font(.caption)
-        .padding(.horizontal, 20).padding(.vertical, 11)
+        .font(.caption2)
+        .imageScale(.small)
+        .padding(.horizontal, 16).padding(.vertical, 6)
         .background(.white.opacity(0.85))
     }
 
     private var pageRail: some View {
         ScrollView {
-            VStack(spacing: 18) {
+            LazyVStack(spacing: 18) {
                 HStack {
                     Text("PAGES").font(.system(size: 10, weight: .semibold)).tracking(1.5)
                     Spacer()
@@ -175,7 +241,8 @@ struct NotebookEditor: View {
                             PagePreview(
                                 notebookID: notebookID,
                                 page: item,
-                                updatedAt: notebook?.updatedAt ?? .distantPast,
+                                revision: pageRevisions[item.id, default: 0],
+                                cache: thumbnails,
                                 activeDrawing: item.id == currentPageID ? drawing : nil,
                                 activeShapes: item.id == currentPageID ? shapes : nil
                             )
@@ -216,6 +283,7 @@ struct NotebookEditor: View {
             try store.saveDrawing(changed, notebookID: notebookID, pageID: pageID)
             pendingDrawing = nil
             inkSaveFailed = false
+            pageRevisions[pageID, default: 0] += 1
         } catch {
             inkSaveFailed = true
             store.errorMessage = error.localizedDescription
@@ -234,6 +302,7 @@ struct NotebookEditor: View {
             try store.saveShapes(changed, notebookID: notebookID, pageID: pageID)
             pendingShapes = nil
             shapeSaveFailed = false
+            pageRevisions[pageID, default: 0] += 1
         } catch {
             shapeSaveFailed = true
             store.errorMessage = error.localizedDescription
@@ -259,6 +328,8 @@ struct NotebookEditor: View {
     }
 
     private func loadPage(_ id: UUID, entryPosition: PageEntryPosition = .top) {
+        showAIChat = false
+        aiChat.newThread()
         pageEntryPosition = entryPosition
         currentPageID = id
         do {
@@ -289,6 +360,7 @@ struct NotebookEditor: View {
     private func turnPage(_ direction: PageTurnDirection, from sourcePageID: UUID) {
         guard currentPageID == sourcePageID, let pages = notebook?.pages else { return }
         let target = pageIndex + (direction == .next ? 1 : -1)
+        if direction == .next && target == pages.count { addPage(); return }
         guard pages.indices.contains(target) else { return }
         switchPage(pages[target].id, entryPosition: direction == .previous ? .bottom : .top)
     }
@@ -335,24 +407,44 @@ struct NotebookEditor: View {
     }
 }
 
+/// Rendered thumbnails by page, so scrolling the lazy rail doesn't re-read and re-render pages.
+private final class ThumbnailCache {
+    struct Key: Hashable { let page: UUID; let revision: Int; let paper: PaperStyle; let background: String? }
+    private var images: [UUID: (key: Key, image: UIImage)] = [:]
+
+    func image(for key: Key) -> UIImage? {
+        images[key.page].flatMap { $0.key == key ? $0.image : nil }
+    }
+    func store(_ image: UIImage, for key: Key) { images[key.page] = (key, image) }
+}
+
 private struct PagePreview: View {
     @EnvironmentObject private var store: NotebookStore
     let notebookID: UUID
     let page: NotePage
-    let updatedAt: Date
+    let revision: Int
+    let cache: ThumbnailCache
     let activeDrawing: PKDrawing?
     let activeShapes: [NoteShape]?
     @State private var image: UIImage?
 
+    private var key: ThumbnailCache.Key {
+        .init(page: page.id, revision: revision, paper: page.paper, background: page.backgroundFile)
+    }
+
     var body: some View {
         Group {
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            if let image = image ?? cache.image(for: key) { Image(uiImage: image).resizable().scaledToFit() }
             else { Rectangle().fill(.white) }
         }
-        .task(id: updatedAt) {
+        .task(id: key) {
+            let key = key
+            if let cached = cache.image(for: key) { image = cached; return }
             let ink = activeDrawing ?? store.drawing(notebookID: notebookID, pageID: page.id)
             let pageShapes = activeShapes ?? (try? store.shapes(notebookID: notebookID, pageID: page.id)) ?? []
-            image = PageRenderer.thumbnail(drawing: ink, paper: page.paper, backgroundURL: store.backgroundURL(notebookID: notebookID, pageID: page.id), shapes: pageShapes)
+            let rendered = PageRenderer.thumbnail(drawing: ink, paper: page.paper, backgroundURL: store.backgroundURL(notebookID: notebookID, pageID: page.id), shapes: pageShapes)
+            cache.store(rendered, for: key)
+            image = rendered
         }
     }
 }

@@ -264,8 +264,24 @@ final class NotebookStore: ObservableObject {
         let notebook = try effectiveNotebook(notebookID)
         var drawings: [String: Data] = [:]
         var backgrounds: [String: Data] = [:]
+        let tooLarge = StoreError.oversized("This notebook is too large for a restorable editable backup (500 MB maximum). Duplicate the notebook and divide its pages into smaller notebooks before exporting backups.")
+        // JSON stores Data as base64 (4 bytes per 3). Stop before holding and encoding
+        // assets that can't fit, instead of finding out after building the whole archive.
+        var estimated = 0
+        func reserve(_ bytes: Int) throws {
+            estimated += (bytes + 2) / 3 * 4 + 64
+            guard estimated <= Self.maximumBackupBytes else { throw tooLarge }
+        }
         for page in notebook.pages {
-            drawings[page.id.uuidString] = try encodeDrawing(drawingForExport(notebookID: notebookID, pageID: page.id))
+            if let filename = page.backgroundFile {
+                let url = try safeFile(filename, in: directory(notebookID))
+                if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize { try reserve(size) }
+            }
+        }
+        for page in notebook.pages {
+            let ink = try encodeDrawing(drawingForExport(notebookID: notebookID, pageID: page.id))
+            try reserve(ink.count)
+            drawings[page.id.uuidString] = ink
             if let filename = page.backgroundFile {
                 let data = try Data(contentsOf: safeFile(filename, in: directory(notebookID)))
                 // Do not offer a successful backup that this same app cannot restore.
@@ -276,9 +292,7 @@ final class NotebookStore: ObservableObject {
         }
         let archive = Backup(notebook: notebook, drawings: drawings, backgrounds: backgrounds)
         let encoded = try JSONEncoder().encode(archive)
-        guard encoded.count <= Self.maximumBackupBytes else {
-            throw StoreError.oversized("This notebook is too large for a restorable editable backup (500 MB maximum). Duplicate the notebook and divide its pages into smaller notebooks before exporting backups.")
-        }
+        guard encoded.count <= Self.maximumBackupBytes else { throw tooLarge }
         let folder = fileManager.temporaryDirectory.appendingPathComponent("DrawBookExports", isDirectory: true)
         try prepareDirectory(folder)
         let output = folder.appendingPathComponent("\(safeExportName(notebook.title))-\(UUID().uuidString.prefix(8)).papernest")
@@ -381,6 +395,9 @@ final class NotebookStore: ObservableObject {
                   shape.rotation.isFinite, abs(shape.rotation) <= 1_000_000,
                   components.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
                 throw StoreError.invalidDocument("a shape has invalid geometry or styling.")
+            }
+            guard shape.hasValidContent else {
+                throw StoreError.invalidDocument("a text box or path has invalid content.")
             }
         }
     }

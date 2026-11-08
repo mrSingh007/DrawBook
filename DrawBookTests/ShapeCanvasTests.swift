@@ -5,6 +5,45 @@ import Combine
 
 final class ShapeCanvasTests: XCTestCase {
     @MainActor
+    func testAICanvasBatchChecksPageSnapshotAndUndoesAsOneEdit() throws {
+        let pageID = UUID()
+        let ink = sampleInk()
+        let original = NoteShape(kind: .rectangle, frame: CGRect(x: 24, y: 24, width: 100, height: 80))
+        let host = PaperCanvasHost(pageID: pageID, drawing: ink, paper: .blank, backgroundURL: nil, shapes: [original])
+        let controller = CanvasController()
+        controller.attach(host)
+        let undo = try XCTUnwrap(host.canvas.undoManager)
+        undo.groupsByEvent = false
+        var updates: [[NoteShape]] = []
+        host.onShapesChange = { updates.append($0) }
+
+        var moved = original
+        moved.frame.origin.x = 400
+        let added = NoteShape(kind: .ellipse, frame: CGRect(x: 560, y: 24, width: 80, height: 60))
+        let before = AIPageContent(drawing: ink, shapes: [original])
+        let after = AIPageContent(drawing: PKDrawing(), shapes: [moved, added])
+        XCTAssertFalse(controller.applyAIPage(after, replacing: before, pageID: UUID()))
+        XCTAssertFalse(controller.applyAIPage(after, replacing: after, pageID: UUID()))
+        XCTAssertFalse(controller.applyAIPage(after, replacing: AIPageContent(drawing: PKDrawing(), shapes: [original]), pageID: pageID))
+        XCTAssertFalse(controller.applyAIPage(after, replacing: AIPageContent(drawing: ink, shapes: []), pageID: pageID))
+        XCTAssertTrue(updates.isEmpty)
+        XCTAssertFalse(undo.canUndo)
+
+        undo.beginUndoGrouping()
+        XCTAssertTrue(controller.applyAIPage(after, replacing: before, pageID: pageID))
+        undo.endUndoGrouping()
+        XCTAssertEqual(updates, [[moved, added]])
+        XCTAssertTrue(host.canvas.drawing.strokes.isEmpty)
+        controller.undo()
+        XCTAssertEqual(host.shapes, [original])
+        XCTAssertEqual(updates.last, [original])
+        XCTAssertEqual(host.canvas.drawing, ink)
+        controller.redo()
+        XCTAssertEqual(host.shapes, after.shapes)
+        XCTAssertEqual(host.canvas.drawing, after.drawing)
+    }
+
+    @MainActor
     func testOldPageTeardownDoesNotPublishDeselectionAfterNewPageAttaches() async throws {
         let controller = CanvasController()
         let first = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil)
@@ -63,6 +102,36 @@ final class ShapeCanvasTests: XCTestCase {
         XCTAssertEqual(inkCallbacks, 0)
         XCTAssertEqual(host.canvas.drawing.strokes.count, ink.strokes.count)
         XCTAssertEqual(host.canvas.drawing.bounds, ink.bounds)
+    }
+
+    @MainActor
+    func testFlatLineConvertedToClosedShapeGetsPositiveSize() throws {
+        let host = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil)
+        host.addShape(kind: .line, color: .black, lineWidth: 3, filled: false)
+        var line = try XCTUnwrap(host.selectedShape)
+        line.frame.size.height = 0
+        host.setShapes([line])
+        host.updateSelectedShape(kind: .rectangle)
+        let rectangle = try XCTUnwrap(host.shapes.first)
+        XCTAssertEqual(rectangle.kind, .rectangle)
+        XCTAssertGreaterThan(rectangle.frame.height, 0)
+        XCTAssertGreaterThan(rectangle.frame.width, 0)
+    }
+
+    @MainActor
+    func testTextTallerThanThePageIsNotAccepted() throws {
+        let host = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil)
+        let tall = (1...100).map { "line \($0)" }.joined(separator: "\n")
+        XCTAssertLessThan(tall.utf8.count, 4_000)
+        host.addText(tall, color: .black)
+        XCTAssertTrue(host.shapes.isEmpty)
+        host.addText("Short", color: .black)
+        host.updateSelectedText(tall)
+        XCTAssertEqual(host.shapes.first?.text, "Short")
+        host.updateSelectedShape(fontSize: 144)
+        host.updateSelectedText(String(repeating: "word ", count: 120))
+        let text = try XCTUnwrap(host.shapes.first)
+        XCTAssertTrue(ShapeRenderer.textFitsPage(text))
     }
 
     @MainActor
@@ -489,6 +558,35 @@ final class ShapeCanvasTests: XCTestCase {
         host.canvasViewDidEndUsingTool(host.canvas)
         await drainPageTurnCallbacks()
         XCTAssertTrue(turns.isEmpty)
+    }
+
+    @MainActor
+    func testTwoFingerPullWithSlightPinchDriftStillTurnsPages() async {
+        // Real two-finger swipes change finger spacing a little, so UIKit zooms slightly.
+        var turns: [PageTurnDirection] = []
+        let host = pageNavigationHost { turns.append($0) }
+        var edges = pageScrollEdges(host)
+        setPageScrollOffset(host, y: edges.bottom)
+        host.scrollViewWillBeginDragging(host.canvas)
+        host.canvas.zoomScale *= 1.015
+        host.scrollViewDidZoom(host.canvas)
+        edges = pageScrollEdges(host)
+        setPageScrollOffset(host, y: edges.bottom + 64)
+        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        await drainPageTurnCallbacks()
+        XCTAssertEqual(turns, [.next])
+        host.canvas.zoomScale /= 1.015
+        host.scrollViewDidZoom(host.canvas)
+        edges = pageScrollEdges(host)
+        setPageScrollOffset(host, y: edges.top)
+        host.scrollViewWillBeginDragging(host.canvas)
+        host.canvas.zoomScale *= 0.99
+        host.scrollViewDidZoom(host.canvas)
+        edges = pageScrollEdges(host)
+        setPageScrollOffset(host, y: edges.top - 64)
+        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        await drainPageTurnCallbacks()
+        XCTAssertEqual(turns, [.next, .previous])
     }
 
     @MainActor
