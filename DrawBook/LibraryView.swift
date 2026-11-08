@@ -495,7 +495,7 @@ struct HelpSheet: View {
                 Section("Make yourself at home") {
                     Label("Handwrite, sketch, and annotate PDFs.", systemImage: "pencil.tip")
                     Label("Choose an illustrated pen nib for ballpoint, monoline, highlighter, fountain pen, pencil, watercolor, or crayon. Reed pen is available on iPadOS 26 or later. Tap the color circle or size button to adjust the selected tool.", systemImage: "paintpalette")
-                    Label("Pinch to zoom. Pan with two fingers.", systemImage: "hand.draw")
+                    Label("Pinch to zoom. Drag to move the page.", systemImage: "hand.draw")
                 }
                 Section("Shapes") {
                     Text("Tap the Shapes tool to open its popup and add a rectangle, ellipse, triangle, line, or arrow. Tap a shape to select it, drag its body to move it, and drag the blue corner handle to resize it.")

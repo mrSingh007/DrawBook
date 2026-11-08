@@ -24,7 +24,7 @@ Native iPad simulator screenshots with fictional sample notebooks.
 - Use **Add Text** for typed labels and multiline notes. Select a text box in Shapes mode to edit its contents, color, or font size.
 - Use optional **Drawing AI** to read handwriting, add sketches or text, and edit the current page.
 - Point with a temporary red laser that disappears after three seconds and never enters saved notes or exports.
-- Undo and redo on the current page, pinch to zoom, and pan with two fingers. Pull beyond a page edge to turn pages.
+- Undo and redo on the current page, pinch to zoom, and drag to move the page (one finger in Pencil mode, two with Touch drawing). Drag beyond a page edge to turn pages.
 - Import PDFs, export a page as PNG or a notebook as PDF, and export/restore editable backups.
 - Save automatically, with visible save errors and retry controls.
 

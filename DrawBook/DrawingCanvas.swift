@@ -184,13 +184,9 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     private var pageEntryPosition: PageEntryPosition = .top
     private var appliedPageEntry = false
     private var onPageTurn: ((PageTurnDirection) -> Void)?
-    private var pageScrollActive = false
-    private var pageScrollCandidate: PageTurnDirection?
-    private var pageScrollStartZoom: CGFloat = 1
-    private var pageScrollStartOffset = CGPoint.zero
-    private var pageScrollStartedAtTop = false
-    private var pageScrollStartedAtBottom = false
-    private var pageScrollGeneration = 0
+    private var pagePanStart: (offset: CGPoint, top: CGFloat, bottom: CGFloat, zoom: CGFloat)?
+    private var pagePanCandidate: PageTurnDirection?
+    private var pagePanGeneration = 0
     private var nativeToolActive = false
     private var lastWidth: CGFloat = 0
     private var isLayingOut = false
@@ -230,10 +226,10 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         canvas.minimumZoomScale = 0.1
         canvas.maximumZoomScale = 4
         canvas.delegate = self
+        canvas.panGestureRecognizer.addTarget(self, action: #selector(pagePanned(_:)))
         canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
         canvas.accessibilityLabel = "Notebook drawing page"
-        canvas.accessibilityHint = "Use the selected tool. Pinch to zoom and pan with two fingers. Swipe past the bottom or top edge to change pages. In Shapes mode, drag a shape to move it or its corner handle to resize it."
-        canvas.panGestureRecognizer.minimumNumberOfTouches = 2
+        canvas.accessibilityHint = "Use the selected tool. Pinch to zoom. Drag with a finger in Pencil mode, or two fingers with Touch drawing, to move the page. Drag past the bottom or top edge to change pages. In Shapes mode, drag a shape to move it or its corner handle to resize it."
         addSubview(canvas)
         overlay.isUserInteractionEnabled = false
         overlay.backgroundColor = .clear
@@ -281,6 +277,11 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
             if mode != .shapes { select(nil) }
         }
         canvas.drawingPolicy = fingerDrawing ? .anyInput : .pencilOnly
+        // In Pencil mode a finger drag moves the page (and pulls past an edge to turn it).
+        // With Touch drawing one finger draws, so moving the page takes two fingers.
+        // The pencil never pans: it always draws or edits.
+        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerDrawing ? 2 : 1
+        canvas.panGestureRecognizer.allowedTouchTypes = [UITouch.TouchType.direct, .indirectPointer].map { NSNumber(value: $0.rawValue) }
         canvas.drawingGestureRecognizer.isEnabled = mode == .ink
         eraserGesture.isEnabled = isErasing
         canvas.isRulerActive = mode == .ink && (controller?.rulerActive ?? false)
@@ -339,9 +340,8 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         paperView.setNeedsDisplay()
     }
     func stopTools() {
-        pageScrollGeneration += 1
-        pageScrollActive = false
-        pageScrollCandidate = nil
+        pagePanGeneration += 1
+        resetPagePan()
         finishErasing()
         canvas.resignFirstResponder()
         clearLaserTrails()
@@ -369,8 +369,7 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     }
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         nativeToolActive = true
-        pageScrollActive = false
-        pageScrollCandidate = nil
+        resetPagePan()
         if !isErasing {
             // Keep the scratch route after eraser lift for delayed native
             // callbacks. A new ink/lasso gesture starts normal native history.
@@ -399,78 +398,76 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     private var pageBottomOffset: CGFloat {
         max(pageTopOffset, PageRenderer.pageSize.height * canvas.zoomScale - canvas.bounds.height + canvas.adjustedContentInset.bottom)
     }
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        pageScrollGeneration += 1
-        pageScrollCandidate = nil
-        pageScrollStartZoom = canvas.zoomScale
-        pageScrollStartOffset = canvas.contentOffset
-        // Decide edges now: a slight pinch during the swipe moves the zoomed edge offsets.
-        pageScrollStartedAtTop = canvas.contentOffset.y <= pageTopOffset + Self.pageEdgeSlack
-        pageScrollStartedAtBottom = canvas.contentOffset.y >= pageBottomOffset - Self.pageEdgeSlack
-        pageScrollActive = !nativeToolActive && gestureStartShapes == nil && eraserStartDrawing == nil
+    @objc private func pagePanned(_ pan: UIPanGestureRecognizer) {
+        // The host stays still while the canvas scrolls underneath the fingers.
+        trackPagePan(pan.state, translation: pan.translation(in: self), velocity: pan.velocity(in: self))
     }
-    /// Two-finger pans nearly always pinch a little too, so only a real zoom cancels a page turn.
-    private var pageScrollZoomChanged: Bool {
-        abs(canvas.zoomScale / pageScrollStartZoom - 1) > Self.pageTurnZoomTolerance
+    private var pagePanConflictsWithTool: Bool {
+        nativeToolActive || gestureStartShapes != nil || eraserStartDrawing != nil
     }
-    private static let pageTurnZoomTolerance: CGFloat = 0.04
+    private func resetPagePan() {
+        pagePanStart = nil
+        pagePanCandidate = nil
+    }
+    func trackPagePan(_ state: UIGestureRecognizer.State, translation: CGPoint = .zero, velocity: CGPoint = .zero) {
+        switch state {
+        case .began:
+            pagePanGeneration += 1
+            resetPagePan()
+            guard !pagePanConflictsWithTool else { return }
+            pagePanStart = (canvas.contentOffset, pageTopOffset, pageBottomOffset, canvas.zoomScale)
+        case .changed:
+            guard !pagePanConflictsWithTool else { resetPagePan(); return }
+            pagePanCandidate = pageTurnDirection(translation: translation, velocity: velocity)
+        case .ended:
+            // Use the last movement sample. UIKit may already be settling the offset on release.
+            let direction = pagePanCandidate
+            resetPagePan()
+            guard !pagePanConflictsWithTool, let direction else { return }
+            let generation = pagePanGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.pagePanGeneration == generation,
+                      direction == .next ? self.canGoNext : self.canGoPrevious else { return }
+                self.onPageTurn?(direction)
+            }
+        case .cancelled, .failed:
+            resetPagePan()
+        default:
+            break
+        }
+    }
+    private func pageTurnDirection(translation: CGPoint, velocity: CGPoint) -> PageTurnDirection? {
+        guard let start = pagePanStart else { return nil }
+        let offset = canvas.contentOffset
+        // Retain rubber-band navigation for scrolling input with no touch translation.
+        let movement = translation == .zero ? CGPoint(x: start.offset.x - offset.x, y: start.offset.y - offset.y) : translation
+        guard abs(movement.y) > abs(movement.x) else { return nil }
+        let movingUp = movement.y < 0
+        guard movingUp ? canGoNext : canGoPrevious else { return nil }
+        let direction: PageTurnDirection = movingUp ? .next : .previous
+        let overscroll = movingUp ? offset.y - pageBottomOffset : pageTopOffset - offset.y
+        if overscroll >= 28 { return direction }
+
+        // A deliberate pull can turn the page even when the canvas stays at the edge.
+        let edgeSlack: CGFloat = 8
+        let distanceToEdge = movingUp ? start.bottom - start.offset.y : start.offset.y - start.top
+        guard distanceToEdge <= edgeSlack || overscroll >= -edgeSlack else { return nil }
+        let travelPastEdge = abs(translation.y) - max(0, distanceToEdge - edgeSlack)
+        let outwardVelocity = movingUp ? -velocity.y : velocity.y
+        return travelPastEdge > 44 || (travelPastEdge > 20 && outwardVelocity > 500) ? direction : nil
+    }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         positionPaper()
-        guard pageScrollActive else { return }
-        guard !nativeToolActive, !pageScrollZoomChanged else {
-            pageScrollActive = false
-            pageScrollCandidate = nil
-            return
-        }
-        let vertical = canvas.contentOffset.y - pageScrollStartOffset.y
-        let horizontal = canvas.contentOffset.x - pageScrollStartOffset.x
-        guard abs(vertical) > abs(horizontal) else { pageScrollCandidate = nil; return }
-        if canGoNext && canvas.contentOffset.y >= pageBottomOffset + Self.pageTurnOverscroll { pageScrollCandidate = .next }
-        else if canGoPrevious && canvas.contentOffset.y <= pageTopOffset - Self.pageTurnOverscroll { pageScrollCandidate = .previous }
-        else { pageScrollCandidate = nil }
-    }
-    /// Rubber-banding halves the finger travel, so a modest pull past the edge is enough.
-    private static let pageTurnOverscroll: CGFloat = 28
-    /// A drag that starts already resting on an edge turns the page after this much finger travel.
-    private static let pageTurnEdgeTravel: CGFloat = 44
-    /// How close to an edge counts as resting on it (pixel rounding, deceleration settling).
-    private static let pageEdgeSlack: CGFloat = 8
-    /// Pan direction for a drag that began resting on the top/bottom edge, if it pulled far
-    /// enough (or flicked fast enough) away from the page. Covers short two-finger swipes
-    /// whose rubber-band overscroll never reaches `pageTurnOverscroll`.
-    private func edgeSwipeDirection() -> PageTurnDirection? {
+        // UIKit can apply the offset after our pan target sees the change.
         let pan = canvas.panGestureRecognizer
-        // Measure in the host: the scroll view's own coordinates move with the content.
-        let travel = pan.translation(in: self)
-        let velocity = pan.velocity(in: self)
-        guard abs(travel.y) > abs(travel.x) else { return nil }
-        let flick = abs(velocity.y) > 500 && abs(travel.y) > 20
-        let far = abs(travel.y) > Self.pageTurnEdgeTravel
-        guard far || flick else { return nil }
-        // Finger moving up (negative y) pulls past the bottom edge → next page.
-        if travel.y < 0, pageScrollStartedAtBottom, canGoNext, canvas.contentOffset.y >= pageBottomOffset - Self.pageEdgeSlack { return .next }
-        if travel.y > 0, pageScrollStartedAtTop, canGoPrevious, canvas.contentOffset.y <= pageTopOffset + Self.pageEdgeSlack { return .previous }
-        return nil
-    }
-    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        guard pageScrollActive else { return }
-        pageScrollActive = false
-        guard !nativeToolActive, !pageScrollZoomChanged,
-              let direction = pageScrollCandidate ?? edgeSwipeDirection() else { pageScrollCandidate = nil; return }
-        pageScrollCandidate = nil
-        let generation = pageScrollGeneration
-        // Let UIKit finish releasing the old page's pan gesture before SwiftUI
-        // replaces its canvas. A stale source page is also checked by the editor.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.pageScrollGeneration == generation,
-                  direction == .next ? self.canGoNext : self.canGoPrevious else { return }
-            self.onPageTurn?(direction)
+        if pagePanStart != nil, pan.state == .changed, pan.translation(in: self) == .zero {
+            trackPagePan(.changed)
         }
     }
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        if pageScrollActive && pageScrollZoomChanged {
-            pageScrollActive = false
-            pageScrollCandidate = nil
+        // A little pinch drift is normal during a two-finger drag.
+        if let start = pagePanStart, abs(canvas.zoomScale / start.zoom - 1) > 0.04 {
+            resetPagePan()
         }
         centerPaper()
         positionPaper()

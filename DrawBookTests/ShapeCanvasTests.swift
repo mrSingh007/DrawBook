@@ -472,13 +472,12 @@ final class ShapeCanvasTests: XCTestCase {
         let edges = pageScrollEdges(host)
         // Programmatic scrolls and bounce/deceleration cannot turn pages.
         setPageScrollOffset(host, y: edges.bottom + 80)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
         setPageScrollOffset(host, y: edges.top - 80)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
         setPageScrollOffset(host, y: edges.top)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         setPageScrollOffset(host, y: (edges.top + edges.bottom) / 2)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: true)
+        host.trackPagePan(.changed, translation: CGPoint(x: 0, y: -(edges.bottom - edges.top) / 2))
+        host.trackPagePan(.ended)
         setPageScrollOffset(host, y: edges.bottom + 80)
         await drainPageTurnCallbacks()
         XCTAssertTrue(turns.isEmpty)
@@ -490,19 +489,62 @@ final class ShapeCanvasTests: XCTestCase {
         let host = pageNavigationHost { turns.append($0) }
         let edges = pageScrollEdges(host)
         setPageScrollOffset(host, y: edges.bottom)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         setPageScrollOffset(host, y: edges.bottom + 64)
+        host.trackPagePan(.changed)
         XCTAssertTrue(turns.isEmpty, "Replacing the page must wait until the drag releases")
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: true)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.ended)
+        host.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertEqual(turns, [.next])
         setPageScrollOffset(host, y: edges.top)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         setPageScrollOffset(host, y: edges.top - 64)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed)
+        host.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertEqual(turns, [.next, .previous])
+    }
+
+    @MainActor
+    func testSlowDragTurnsAtBothEdgesWithoutRubberBanding() async {
+        var turns: [PageTurnDirection] = []
+        let host = pageNavigationHost { turns.append($0) }
+        host.configure(mode: .ink, fingerDrawing: true)
+        let edges = pageScrollEdges(host)
+        for (edge, travel) in [(edges.bottom, CGFloat(-60)), (edges.top, CGFloat(60))] {
+            setPageScrollOffset(host, y: edge)
+            host.trackPagePan(.began)
+            host.trackPagePan(.changed, translation: CGPoint(x: 2, y: travel / 2))
+            host.trackPagePan(.changed, translation: CGPoint(x: 2, y: travel))
+            let turnsBeforeRelease = turns
+            await drainPageTurnCallbacks()
+            XCTAssertEqual(turns, turnsBeforeRelease)
+            host.trackPagePan(.ended)
+            host.trackPagePan(.ended)
+            await drainPageTurnCallbacks()
+        }
+        XCTAssertEqual(turns, [.next, .previous])
+    }
+
+    @MainActor
+    func testReversingOrCancellingTouchDragKeepsTheCurrentPage() async {
+        var turns: [PageTurnDirection] = []
+        let host = pageNavigationHost { turns.append($0) }
+        setPageScrollOffset(host, y: pageScrollEdges(host).bottom)
+        host.trackPagePan(.began)
+        host.trackPagePan(.changed, translation: CGPoint(x: 0, y: -60))
+        host.trackPagePan(.changed, translation: CGPoint(x: 0, y: -30), velocity: CGPoint(x: 0, y: 600))
+        host.trackPagePan(.ended)
+        await drainPageTurnCallbacks()
+        XCTAssertTrue(turns.isEmpty)
+
+        host.trackPagePan(.began)
+        host.trackPagePan(.changed, translation: CGPoint(x: 0, y: -60))
+        host.trackPagePan(.cancelled)
+        host.trackPagePan(.ended)
+        await drainPageTurnCallbacks()
+        XCTAssertTrue(turns.isEmpty)
     }
 
     @MainActor
@@ -511,15 +553,17 @@ final class ShapeCanvasTests: XCTestCase {
         let first = pageNavigationHost(canPrevious: false, canNext: true) { turns.append($0) }
         let firstEdges = pageScrollEdges(first)
         setPageScrollOffset(first, y: firstEdges.top)
-        first.scrollViewWillBeginDragging(first.canvas)
+        first.trackPagePan(.began)
         setPageScrollOffset(first, y: firstEdges.top - 80)
-        first.scrollViewDidEndDragging(first.canvas, willDecelerate: false)
+        first.trackPagePan(.changed)
+        first.trackPagePan(.ended)
         let last = pageNavigationHost(canPrevious: true, canNext: false) { turns.append($0) }
         let lastEdges = pageScrollEdges(last)
         setPageScrollOffset(last, y: lastEdges.bottom)
-        last.scrollViewWillBeginDragging(last.canvas)
+        last.trackPagePan(.began)
         setPageScrollOffset(last, y: lastEdges.bottom + 80)
-        last.scrollViewDidEndDragging(last.canvas, willDecelerate: false)
+        last.trackPagePan(.changed)
+        last.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertTrue(turns.isEmpty)
     }
@@ -530,10 +574,12 @@ final class ShapeCanvasTests: XCTestCase {
         let host = pageNavigationHost { turns.append($0) }
         let edge = pageScrollEdges(host).bottom
         setPageScrollOffset(host, y: edge)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         setPageScrollOffset(host, y: edge + 70)
+        host.trackPagePan(.changed)
         setPageScrollOffset(host, y: edge + 8)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed)
+        host.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertTrue(turns.isEmpty)
     }
@@ -544,20 +590,33 @@ final class ShapeCanvasTests: XCTestCase {
         let host = pageNavigationHost { turns.append($0) }
         var edge = pageScrollEdges(host).bottom
         setPageScrollOffset(host, y: edge)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         host.canvas.zoomScale *= 1.5
         host.scrollViewDidZoom(host.canvas)
         edge = pageScrollEdges(host).bottom
         setPageScrollOffset(host, y: edge + 80)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed)
+        host.trackPagePan(.ended)
         setPageScrollOffset(host, y: edge)
         host.canvasViewDidBeginUsingTool(host.canvas)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         setPageScrollOffset(host, y: edge + 80)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed)
+        host.trackPagePan(.ended)
         host.canvasViewDidEndUsingTool(host.canvas)
         await drainPageTurnCallbacks()
         XCTAssertTrue(turns.isEmpty)
+    }
+
+    @MainActor
+    func testOneFingerDragMovesPageOnlyInPencilMode() {
+        let host = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil)
+        host.configure(mode: .ink, fingerDrawing: false)
+        XCTAssertEqual(host.canvas.panGestureRecognizer.minimumNumberOfTouches, 1)
+        XCTAssertFalse(host.canvas.panGestureRecognizer.allowedTouchTypes.contains(NSNumber(value: UITouch.TouchType.pencil.rawValue)),
+                       "The pencil must draw, never scroll")
+        host.configure(mode: .ink, fingerDrawing: true)
+        XCTAssertEqual(host.canvas.panGestureRecognizer.minimumNumberOfTouches, 2, "One finger draws with Touch drawing")
     }
 
     @MainActor
@@ -567,24 +626,22 @@ final class ShapeCanvasTests: XCTestCase {
         let host = pageNavigationHost { turns.append($0) }
         var edges = pageScrollEdges(host)
         setPageScrollOffset(host, y: edges.bottom)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         host.canvas.zoomScale *= 1.015
         host.scrollViewDidZoom(host.canvas)
-        edges = pageScrollEdges(host)
-        setPageScrollOffset(host, y: edges.bottom + 64)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed, translation: CGPoint(x: 2, y: -60))
+        host.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertEqual(turns, [.next])
         host.canvas.zoomScale /= 1.015
         host.scrollViewDidZoom(host.canvas)
         edges = pageScrollEdges(host)
         setPageScrollOffset(host, y: edges.top)
-        host.scrollViewWillBeginDragging(host.canvas)
+        host.trackPagePan(.began)
         host.canvas.zoomScale *= 0.99
         host.scrollViewDidZoom(host.canvas)
-        edges = pageScrollEdges(host)
-        setPageScrollOffset(host, y: edges.top - 64)
-        host.scrollViewDidEndDragging(host.canvas, willDecelerate: false)
+        host.trackPagePan(.changed, translation: CGPoint(x: 2, y: 60))
+        host.trackPagePan(.ended)
         await drainPageTurnCallbacks()
         XCTAssertEqual(turns, [.next, .previous])
     }
