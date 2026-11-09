@@ -371,7 +371,7 @@ final class DrawingCanvasTests: XCTestCase {
         host.onChange = { reportedStrokeCounts.append($0.strokes.count) }
 
         history.beginUndoGrouping()
-        host.clearDrawing()
+        host.clearPage()
         history.endUndoGrouping()
         XCTAssertTrue(host.canvas.drawing.strokes.isEmpty)
         XCTAssertEqual(reportedStrokeCounts.last, 0)
@@ -388,6 +388,37 @@ final class DrawingCanvasTests: XCTestCase {
     }
 
     @MainActor
+    func testClearingPageRemovesTextAndShapesWithOneUndo() throws {
+        let host = PaperCanvasHost(pageID: UUID(), drawing: sampleInk(), paper: .ruled, backgroundURL: nil)
+        let shapes = [NoteShape(kind: .rectangle, frame: CGRect(x: 20, y: 30, width: 100, height: 80)),
+                      NoteShape(kind: .text, frame: CGRect(x: 20, y: 200, width: 200, height: 30), text: "Title")]
+        host.setShapes(shapes)
+        let history = try XCTUnwrap(host.canvas.undoManager)
+        history.removeAllActions()
+        history.groupsByEvent = false
+        var reportedShapes: [[NoteShape]] = []
+        host.onShapesChange = { reportedShapes.append($0) }
+
+        history.beginUndoGrouping()
+        host.clearPage()
+        history.endUndoGrouping()
+        XCTAssertTrue(host.canvas.drawing.strokes.isEmpty)
+        XCTAssertTrue(host.shapes.isEmpty)
+        XCTAssertEqual(reportedShapes.last, [], "Clearing must notify autosave of the removed shapes.")
+
+        history.undo()
+        XCTAssertEqual(host.canvas.drawing.strokes.count, 1)
+        XCTAssertEqual(host.shapes, shapes)
+        XCTAssertFalse(history.canUndo, "Ink and shapes come back with a single undo.")
+
+        // A page with only text or shapes (no ink) still clears.
+        let textOnly = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .ruled, backgroundURL: nil)
+        textOnly.setShapes(shapes)
+        textOnly.clearPage()
+        XCTAssertTrue(textOnly.shapes.isEmpty)
+    }
+
+    @MainActor
     func testUndoHistoryDoesNotAffectAnotherPage() throws {
         let first = PaperCanvasHost(pageID: UUID(), drawing: sampleInk(), paper: .grid, backgroundURL: nil)
         let second = PaperCanvasHost(pageID: UUID(), drawing: sampleInk(), paper: .blank, backgroundURL: nil)
@@ -398,7 +429,7 @@ final class DrawingCanvasTests: XCTestCase {
             history.removeAllActions()
             history.groupsByEvent = false
             history.beginUndoGrouping()
-            host.clearDrawing()
+            host.clearPage()
             history.endUndoGrouping()
         }
         XCTAssertTrue(first.canvas.drawing.strokes.isEmpty)
@@ -421,7 +452,7 @@ final class DrawingCanvasTests: XCTestCase {
         history.removeAllActions()
         history.groupsByEvent = false
         history.beginUndoGrouping()
-        host.clearDrawing()
+        host.clearPage()
         history.endUndoGrouping()
 
         host.setPaper(.dotted, backgroundURL: nil)

@@ -105,7 +105,7 @@ struct NotebookEditor: View {
                     }
                     .disabled(page?.backgroundFile != nil || pageLoadError != nil)
                     Button("Rename notebook", systemImage: "pencil") { title = notebook?.title ?? ""; rename = true }
-                    Button("Clear page ink", systemImage: "eraser", role: .destructive) { confirmingClear = true }
+                    Button("Clear page", systemImage: "eraser", role: .destructive) { confirmingClear = true }
                         .disabled(pageLoadError != nil)
                     Button("Delete page", systemImage: "trash", role: .destructive) { confirmingDelete = true }
                         .disabled((notebook?.pages.count ?? 0) <= 1)
@@ -130,10 +130,10 @@ struct NotebookEditor: View {
         .onChange(of: rename) { _, isPresented in
             if !isPresented { canvasController.focus() }
         }
-        .alert("Clear ink on this page?", isPresented: $confirmingClear) {
+        .alert("Clear this page?", isPresented: $confirmingClear) {
             Button("Cancel", role: .cancel) {}
-            Button("Clear ink", role: .destructive) { canvasController.clear() }
-        } message: { Text("The paper and imported PDF stay in place. You can undo this while the page is open.") }
+            Button("Clear page", role: .destructive) { canvasController.clear() }
+        } message: { Text("Removes all handwriting, drawings, text, and shapes. The paper and imported PDF stay in place. You can undo this while the page is open.") }
         .alert("Delete this page?", isPresented: $confirmingDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete page", role: .destructive) { deleteCurrentPage() }

@@ -25,7 +25,7 @@ final class CanvasController: ObservableObject {
 
     func undo() { host?.canvas.historyUndoManager.undo(); refreshHistory() }
     func redo() { host?.canvas.historyUndoManager.redo(); refreshHistory() }
-    func clear() { host?.clearDrawing(); refreshHistory() }
+    func clear() { host?.clearPage(); refreshHistory() }
     func finishEditing() -> PKDrawing? { host?.finishErasing(); return host?.canvas.drawing }
     func finishEditing(pageID: UUID) -> PKDrawing? {
         guard host?.pageID == pageID else { return nil }
@@ -353,19 +353,12 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         else { publishSelection() }
         overlay.setNeedsDisplay()
     }
-    func clearDrawing() {
-        let previous = canvas.drawing
-        guard !previous.strokes.isEmpty else { return }
-        canvas.historyUndoManager.registerUndo(withTarget: self) { $0.replaceDrawingWithUndo(previous) }
-        canvas.historyUndoManager.setActionName("Clear Ink")
-        canvas.drawing = PKDrawing()
-        onChange?(canvas.drawing)
-    }
-    private func replaceDrawingWithUndo(_ drawing: PKDrawing) {
-        let previous = canvas.drawing
-        canvas.historyUndoManager.registerUndo(withTarget: self) { $0.replaceDrawingWithUndo(previous) }
-        canvas.drawing = drawing
-        onChange?(drawing)
+    /// Removes ink, text, and shapes as one undoable step. Paper and PDF backgrounds stay.
+    func clearPage() {
+        finishErasing()
+        finishShapeGesture()
+        guard !canvas.drawing.strokes.isEmpty || !shapes.isEmpty else { return }
+        replacePageWithUndo(AIPageContent(drawing: PKDrawing(), shapes: []), selected: nil, name: "Clear Page")
     }
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         nativeToolActive = true
@@ -557,16 +550,16 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
               shapes == original.shapes,
               canvas.drawing.dataRepresentation() == original.drawing.dataRepresentation() else { return false }
         let selection = selectedID.flatMap { id in changed.shapes.contains { $0.id == id } ? id : nil }
-        replaceAIPageWithUndo(changed, selected: selection)
+        replacePageWithUndo(changed, selected: selection, name: "AI Canvas Edits")
         return true
     }
-    private func replaceAIPageWithUndo(_ changed: AIPageContent, selected: UUID?) {
+    private func replacePageWithUndo(_ changed: AIPageContent, selected: UUID?, name: String) {
         let previous = AIPageContent(drawing: canvas.drawing, shapes: shapes)
         let oldSelection = selectedID
         canvas.historyUndoManager.registerUndo(withTarget: self) {
-            $0.replaceAIPageWithUndo(previous, selected: oldSelection)
+            $0.replacePageWithUndo(previous, selected: oldSelection, name: name)
         }
-        canvas.historyUndoManager.setActionName("AI Canvas Edits")
+        canvas.historyUndoManager.setActionName(name)
         if changed.drawing != previous.drawing {
             nativeErasureOrigin = nil
             canvas.replaceRenderedInk(with: changed.drawing)
