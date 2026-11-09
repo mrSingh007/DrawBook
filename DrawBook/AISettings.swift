@@ -45,8 +45,10 @@ enum AIProvider: String, CaseIterable, Identifiable {
     /// The request field that caps output. OpenAI's reasoning models reject `max_tokens`.
     var maxTokensField: String { self == .openAI ? "max_completion_tokens" : "max_tokens" }
 
-    /// The output cap. OpenAI counts hidden reasoning tokens against it, so it gets more room.
-    var maxOutputTokens: Int { self == .openAI ? 16_384 : 4096 }
+    /// The output cap per reply. Large page edits arrive as JSON tool calls, and reasoning models
+    /// count hidden thinking against the cap, so every provider gets the same generous room.
+    /// Providers bill only the tokens actually generated, so a high cap costs nothing extra.
+    var maxOutputTokens: Int { 16_384 }
 
     /// Where to create an API key, shown in AI configuration.
     var keyURL: URL {

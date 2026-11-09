@@ -183,6 +183,7 @@ enum AIClient {
             body[provider.maxTokensField] = .number(Double(provider.maxOutputTokens))
         case .ollama:
             body["stream"] = false
+            body["options"] = ["num_predict": .number(Double(provider.maxOutputTokens))]
         }
         var request = URLRequest(url: provider.endpoint)
         request.httpMethod = "POST"

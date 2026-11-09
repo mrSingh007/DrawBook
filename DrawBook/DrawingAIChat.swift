@@ -13,9 +13,8 @@ final class DrawingAIChat: ObservableObject {
     @Published private(set) var bubbles: [Bubble] = []
     @Published private(set) var pendingPrompt: String?
     @Published private(set) var activity: [String] = []
-    /// Completed turns, compacted, with whether each one shared ink. Turns that shared ink
-    /// are never sent once sharing is off: their tool results and replies can contain it.
-    private var history: [(messages: [AIChatMessage], sharedInk: Bool)] = []
+    /// Completed turns, compacted.
+    private var history: [[AIChatMessage]] = []
     private var keys = AIPageKeys()
     private var request: Task<Void, Never>?
 
@@ -23,17 +22,12 @@ final class DrawingAIChat: ObservableObject {
         pendingPrompt == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Whether earlier turns will be left out of the next request because they shared ink.
-    func withholdsInkTurns(includeInk: Bool) -> Bool {
-        !includeInk && history.contains { $0.sharedInk }
-    }
-
     enum ApplyResult { case applied, saveFailed, pageChanged }
 
     /// Runs one agent turn against a working copy of the page. `apply` commits the final
     /// page as a single undoable edit and reports whether it was saved.
     func send(provider: AIProvider, apiKey: String, model: String, page: AIPageContent,
-              info: AIPageState.PageInfo, includeInk: Bool, imageInput: Bool, selectedObjectID: UUID?,
+              info: AIPageState.PageInfo, imageInput: Bool, selectedObjectID: UUID?,
               apply: @escaping (AIPageContent) -> ApplyResult) {
         guard canSend, !apiKey.isEmpty else { return }
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,27 +37,31 @@ final class DrawingAIChat: ObservableObject {
         activity = []
         // Key changes stay provisional until the canvas accepts the edit.
         let keys = keys.copy()
-        let history = history.filter { includeInk || !$0.sharedInk }.flatMap(\.messages)
+        let history = history.flatMap { $0 }
         request = Task {
             do {
                 var handwriting: [HandwritingLine] = []
-                if includeInk, !page.drawing.strokes.isEmpty {
+                if !page.drawing.strokes.isEmpty {
                     activity = ["Reading handwriting on this device…"]
                     handwriting = await HandwritingRecognizer.recognize(page.drawing)
                     try Task.checkCancellation()
                     activity = [handwriting.isEmpty ? "No handwriting recognized" : "Recognized \(handwriting.count) handwritten line\(handwriting.count == 1 ? "" : "s")"]
                 }
-                let shared = AIPageContent(drawing: includeInk ? page.drawing : PKDrawing(), shapes: page.shapes)
-                let state = AIPageState(content: shared, handwriting: handwriting, info: info,
+                let state = AIPageState(content: page, handwriting: handwriting, info: info,
                                         keys: keys, selectedShapeID: selectedObjectID, imageInput: imageInput)
-                let system = state.systemPrompt(includeInk: includeInk)
+                let system = state.systemPrompt()
                 let result = try await AIClient.runAgent(
                     provider: provider, apiKey: apiKey, model: model, system: system,
                     history: history, prompt: prompt, tools: AIPageState.tools(imageInput: imageInput),
                     onEvent: { [weak self] event in
                         if case let .toolStarted(name) = event {
-                            self?.activity.append(name == "apply_patch" ? "Editing the page…"
-                                                  : name == "view_page" ? "Looking at the page…" : "Reading the page…")
+                            let label = switch name {
+                            case "apply_patch": "Editing the page…"
+                            case "clear_page": "Clearing the page…"
+                            case "view_page": "Looking at the page…"
+                            default: "Reading the page…"
+                            }
+                            self?.activity.append(label)
                         }
                     },
                     execute: { [weak self] call in
@@ -75,12 +73,7 @@ final class DrawingAIChat: ObservableObject {
                 try Task.checkCancellation()
                 var saveFailed = false
                 if state.revision > 0 {
-                    var changed = state.content
-                    if !includeInk {
-                        // The agent saw an empty drawing, so every stroke it has is new: keep the
-                        // user's unshared ink and add the agent's strokes on top.
-                        changed.drawing = PKDrawing(strokes: page.drawing.strokes + changed.drawing.strokes)
-                    }
+                    let changed = state.content
                     switch apply(changed) {
                     case .applied: break
                     case .saveFailed: saveFailed = true
@@ -90,7 +83,7 @@ final class DrawingAIChat: ObservableObject {
                     }
                 }
                 self.keys = keys
-                self.history.append((AIClient.compacted(result.newMessages), includeInk))
+                self.history.append(AIClient.compacted(result.newMessages))
                 bubbles.append(Bubble(text: prompt, fromUser: true))
                 bubbles.append(Bubble(text: result.reply, fromUser: false))
                 if saveFailed {
@@ -139,7 +132,6 @@ struct DrawingAIChatView: View {
     let imageInput: Bool
     let pageNumber: Int
     let pageCount: Int
-    @Binding var includeInk: Bool
     let onSend: () -> Void
     let onClose: () -> Void
 
@@ -220,17 +212,9 @@ struct DrawingAIChatView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!chat.canSend)
                 }
-                Toggle("Include handwriting and sketches", isOn: $includeInk)
-                    .font(.subheadline)
-                    .disabled(chat.pendingPrompt != nil)
                 Text(sharingSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if chat.withholdsInkTurns(includeInk: includeInk) {
-                    Text("Earlier messages that included handwriting won’t be sent.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
             .padding(16)
         }
@@ -239,12 +223,8 @@ struct DrawingAIChatView: View {
 
     private var sharingSummary: String {
         let destination = "\(provider.title) (\(model))"
-        let images = imageInput
-            ? " AI can also request images of this page\(includeInk ? "" : ", without ink")."
-            : " No images are sent."
-        return includeInk
-            ? "Handwriting is recognized on this device. Sends chat, page objects, recognized text, and simplified strokes to \(destination)." + images
-            : "Sends chat and page objects to \(destination)." + images + " Turn on ink sharing to let AI read or edit handwriting and sketches."
+        let images = imageInput ? " AI can also request images of this page." : " No images are sent."
+        return "Handwriting is recognized on this device. AI reads this page when it needs to: chat, page objects, recognized text, and simplified strokes go to \(destination)." + images
     }
 
     private func bubble(_ text: String, fromUser: Bool) -> some View {

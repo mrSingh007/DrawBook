@@ -45,7 +45,7 @@ final class DocumentationScreenshots: XCTestCase {
         let workspaceWithChat = workspace.overlay(alignment: .bottomTrailing) {
             DrawingAIChatView(chat: chat, provider: settings.provider, model: settings.model,
                               imageInput: settings.imageInput, pageNumber: 1, pageCount: 2,
-                              includeInk: .constant(true), onSend: {}, onClose: {})
+                              onSend: {}, onClose: {})
                 .frame(width: 400, height: 360)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
                 .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(Theme.accent.opacity(0.16)) }

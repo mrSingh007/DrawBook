@@ -7,7 +7,6 @@ struct NotebookEditor: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("fingerDrawing") private var fingerDrawing = false
-    @AppStorage("drawingAIIncludeInk") private var includeInkInAI = true
     @StateObject private var canvasController = CanvasController()
     @State private var currentPageID: UUID?
     @State private var pageEntryPosition: PageEntryPosition = .top
@@ -164,8 +163,7 @@ struct NotebookEditor: View {
         .popover(isPresented: $showAIChat, arrowEdge: .bottom) {
             DrawingAIChatView(chat: aiChat, provider: aiSettings.provider,
                               model: aiSettings.model, imageInput: aiSettings.imageInput,
-                              pageNumber: pageIndex + 1, pageCount: notebook?.pages.count ?? 1,
-                              includeInk: $includeInkInAI) {
+                              pageNumber: pageIndex + 1, pageCount: notebook?.pages.count ?? 1) {
                 guard currentPageID == pageID, pageLoadError == nil else { return }
                 guard flush() else {
                     aiChat.errorMessage = "Retry saving the page before asking AI to edit it."
@@ -178,7 +176,7 @@ struct NotebookEditor: View {
                                                 pen: canvasController.currentInk,
                                                 backgroundURL: store.backgroundURL(notebookID: notebookID, pageID: pageID))
                 aiChat.send(provider: aiSettings.provider, apiKey: aiSettings.apiKey,
-                            model: aiSettings.model, page: original, info: info, includeInk: includeInkInAI,
+                            model: aiSettings.model, page: original, info: info,
                             imageInput: aiSettings.imageInput,
                             selectedObjectID: canvasController.selectedShape?.id) { changed in
                     guard currentPageID == pageID,

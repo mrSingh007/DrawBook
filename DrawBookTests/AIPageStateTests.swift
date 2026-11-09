@@ -215,20 +215,44 @@ final class AIPageStateTests: XCTestCase {
         XCTAssertEqual(next.document()["ink"]?.objectValue?.keys, ["s1", "a", "b"])
     }
 
-    func testSystemPromptAddsOnlyTheNotesThatApply() {
-        let content = AIPageContent(drawing: PKDrawing(), shapes: [])
+    func testSystemPromptCarriesOnlyASummaryNotThePage() {
+        let box = NoteShape(kind: .rectangle, frame: CGRect(x: 10, y: 10, width: 50, height: 50))
+        let content = AIPageContent(drawing: PKDrawing(), shapes: [box])
         let plain = AIPageState(content: content, handwriting: [], info: .init(), keys: AIPageKeys(), selectedShapeID: nil)
-        let prompt = plain.systemPrompt(includeInk: true)
+        let prompt = plain.systemPrompt()
         XCTAssertTrue(prompt.hasPrefix(AIPageState.instructions))
         XCTAssertFalse(prompt.contains(AIPageState.imageInstructions))
-        XCTAssertFalse(prompt.contains(AIPageState.unsharedInkInstructions))
-        XCTAssertTrue(prompt.contains("Current page state:\n{\"revision\":0"))
+        XCTAssertTrue(prompt.contains("Page summary: "))
+        XCTAssertTrue(prompt.contains("\"objects\":1"))
+        // The full document (object fields, stroke points) is only available through get_page_state.
+        XCTAssertFalse(prompt.contains("\"kind\":\"rectangle\""))
 
         let images = AIPageState(content: content, handwriting: [], info: .init(), keys: AIPageKeys(),
                                  selectedShapeID: nil, imageInput: true)
-        let full = images.systemPrompt(includeInk: false)
-        XCTAssertTrue(full.contains(AIPageState.imageInstructions))
-        XCTAssertTrue(full.contains(AIPageState.unsharedInkInstructions))
+        XCTAssertTrue(images.systemPrompt().contains(AIPageState.imageInstructions))
+    }
+
+    func testClearPageRemovesInkHandwritingAndObjects() throws {
+        let stroke = PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: [
+            PKStrokePoint(location: CGPoint(x: 10, y: 10), timeOffset: 0, size: CGSize(width: 3, height: 3), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2),
+            PKStrokePoint(location: CGPoint(x: 40, y: 10), timeOffset: 0.1, size: CGSize(width: 3, height: 3), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        ], creationDate: Date()))
+        let box = NoteShape(kind: .rectangle, frame: CGRect(x: 10, y: 10, width: 50, height: 50))
+        let line = HandwritingLine(text: "x", bounds: .zero, confidence: 1, strokeIndices: [0], words: [])
+        let state = AIPageState(content: AIPageContent(drawing: PKDrawing(strokes: [stroke]), shapes: [box]),
+                                handwriting: [line], info: .init(), keys: AIPageKeys(), selectedShapeID: nil)
+        let outcome = state.execute(AIToolCall(id: "c1", name: "clear_page", arguments: .object([:])))
+        XCTAssertEqual(try JSONValue(parsing: outcome.result)["ok"], true)
+        XCTAssertEqual(outcome.summary, "Cleared the page")
+        XCTAssertEqual(state.revision, 1)
+        XCTAssertTrue(state.content.drawing.strokes.isEmpty)
+        XCTAssertTrue(state.content.shapes.isEmpty)
+        XCTAssertEqual(state.document()["handwriting"]?.objectValue?.isEmpty, true)
+
+        let again = state.execute(AIToolCall(id: "c2", name: "clear_page", arguments: .object([:])))
+        XCTAssertEqual(again.summary, "Page was already empty")
+        XCTAssertEqual(state.revision, 1)
+        XCTAssertTrue(AIPageState.tools.contains { $0.name == "clear_page" })
     }
 
     func testChatMarkdownParsesCommonBlocks() {

@@ -35,12 +35,14 @@ final class AIClientTests: XCTestCase {
                 switch provider.wireFormat {
                 case .openAICompatible:
                     XCTAssertEqual(body["tool_choice"] as? String, "auto")
-                    XCTAssertEqual(body[provider.maxTokensField] as? Int, provider.maxOutputTokens)
+                    XCTAssertEqual(body[provider.maxTokensField] as? Int, 16_384)
                     XCTAssertNil(body[provider == .openAI ? "max_tokens" : "max_completion_tokens"])
                     XCTAssertNil(body["stream"])
                     return try Self.response(["choices": [["finish_reason": "stop", "message": ["content": "Done."]]]], url: url)
                 case .ollama:
                     XCTAssertEqual(body["stream"] as? Bool, false)
+                    XCTAssertEqual((body["options"] as? [String: Any])?["num_predict"] as? Int, 16_384)
+                    XCTAssertNil(body["max_tokens"])
                     XCTAssertNil(body["tool_choice"])
                     return try Self.response(["done": true, "done_reason": "stop",
                                               "message": ["role": "assistant", "content": "Done.", "thinking": "hmm"]], url: url)
@@ -336,6 +338,8 @@ final class AIClientTests: XCTestCase {
         XCTAssertEqual(AIProvider.allCases.filter { $0.wireFormat == .ollama }, [.ollamaCloud])
         XCTAssertEqual(AIProvider.anthropic.defaultModel, "claude-opus-5-5")
         XCTAssertEqual(AIProvider.openAI.maxTokensField, "max_completion_tokens")
+        // A low cap cuts off large patch tool calls and reasoning models' replies ("ran out of room").
+        for provider in AIProvider.allCases { XCTAssertEqual(provider.maxOutputTokens, 16_384) }
     }
 
     func testHistoryTrimmingDropsImages() {

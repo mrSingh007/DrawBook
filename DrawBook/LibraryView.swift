@@ -360,7 +360,7 @@ private struct AIConfigurationSheet: View {
                         }
                     }
                 } footer: {
-                    Text("Drawing AI can request an image of the current page, including the paper and any imported PDF. Your handwriting and sketches appear in the image only when Include handwriting and sketches is on.")
+                    Text("Drawing AI can request an image of the current page, including the paper, any imported PDF, and your handwriting and sketches.")
                 }
 
                 if let saveError {
