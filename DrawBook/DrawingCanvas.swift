@@ -156,7 +156,7 @@ struct DrawingCanvas: UIViewRepresentable {
 @MainActor
 final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDelegate {
     let pageID: UUID
-    let canvas = PageCanvasView()
+    private(set) var canvas = PageCanvasView()
     private let paperView: PaperSurface
     private let overlay = EditingSurface()
     private var editPan: UIPanGestureRecognizer!
@@ -217,19 +217,12 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         paperView.layer.shadowRadius = 10
         paperView.layer.shadowOffset = CGSize(width: 0, height: 4)
         addSubview(paperView)
-        canvas.backgroundColor = .clear
-        canvas.isOpaque = false
-        canvas.contentInsetAdjustmentBehavior = .never
+        setUpCanvas(canvas)
         canvas.drawing = drawing
-        canvas.contentSize = PageRenderer.pageSize
-        canvas.alwaysBounceVertical = true
         canvas.minimumZoomScale = 0.1
         canvas.maximumZoomScale = 4
         canvas.delegate = self
-        canvas.panGestureRecognizer.addTarget(self, action: #selector(pagePanned(_:)))
         canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
-        canvas.accessibilityLabel = "Notebook drawing page"
-        canvas.accessibilityHint = "Use the selected tool. Pinch to zoom. Drag with a finger in Pencil mode, or two fingers with Touch drawing, to move the page. Drag past the bottom or top edge to change pages. In Shapes mode, drag a shape to move it or its corner handle to resize it."
         addSubview(canvas)
         overlay.isUserInteractionEnabled = false
         overlay.backgroundColor = .clear
@@ -264,6 +257,52 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         configure(mode: .ink, fingerDrawing: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// Settings every canvas instance needs; see `replaceCanvas(with:)`.
+    private func setUpCanvas(_ canvas: PageCanvasView) {
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+        canvas.contentInsetAdjustmentBehavior = .never
+        canvas.contentSize = PageRenderer.pageSize
+        canvas.alwaysBounceVertical = true
+        canvas.panGestureRecognizer.addTarget(self, action: #selector(pagePanned(_:)))
+        canvas.accessibilityLabel = "Notebook drawing page"
+        canvas.accessibilityHint = "Use the selected tool. Pinch to zoom. Drag with a finger in Pencil mode, or two fingers with Touch drawing, to move the page. Drag past the bottom or top edge to change pages. In Shapes mode, drag a shape to move it or its corner handle to resize it."
+    }
+    /// Swaps in a brand-new PencilKit canvas showing `drawing`. PencilKit caches rendered
+    /// tiles per canvas and, after a programmatic replacement (Clear page, AI edits, or
+    /// their undo), can keep showing pieces of removed ink until the next touch. A fresh
+    /// canvas has no cache, so nothing stale can remain. The page's undo history, tool,
+    /// zoom, scroll position, and gestures carry over.
+    private func replaceCanvas(with drawing: PKDrawing) {
+        let old = canvas
+        let wasFocused = old.isFirstResponder
+        let fresh = PageCanvasView(history: old.historyUndoManager)
+        setUpCanvas(fresh)
+        fresh.setDrawingWithoutUndo(drawing)
+        fresh.tool = old.tool
+        fresh.usesNativeEraserUndo = old.usesNativeEraserUndo
+        fresh.minimumZoomScale = old.minimumZoomScale
+        fresh.maximumZoomScale = old.maximumZoomScale
+        fresh.frame = old.frame
+        fresh.contentInset = old.contentInset
+        fresh.zoomScale = old.zoomScale
+        fresh.contentOffset = old.contentOffset
+        for gesture: UIGestureRecognizer in [editPan, editTap, eraserGesture] {
+            old.removeGestureRecognizer(gesture)
+            fresh.addGestureRecognizer(gesture)
+        }
+        old.delegate = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        insertSubview(fresh, aboveSubview: old)
+        canvas = fresh
+        fresh.delegate = self
+        old.removeFromSuperview()
+        configure(mode: mode, fingerDrawing: fingerDrawing)
+        positionPaper()
+        CATransaction.commit()
+        if wasFocused { focusCanvas() }
+    }
     deinit { laserTimer?.invalidate(); eraserDisplayLink?.invalidate() }
 
     func configure(mode: CanvasMode, fingerDrawing: Bool) {
@@ -562,7 +601,7 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         canvas.historyUndoManager.setActionName(name)
         if changed.drawing != previous.drawing {
             nativeErasureOrigin = nil
-            canvas.replaceRenderedInk(with: changed.drawing)
+            replaceCanvas(with: changed.drawing)
             onChange?(changed.drawing)
         }
         if changed.shapes != previous.shapes {
@@ -919,9 +958,15 @@ private final class EditingSurface: UIView {
 /// Undo actions stay on the page whose canvas recorded them.
 @MainActor
 final class PageCanvasView: PKCanvasView {
-    let historyUndoManager = UndoManager()
+    let historyUndoManager: UndoManager
     private lazy var nativeEraserUndoManager = NativeEraserUndoManager(history: historyUndoManager)
     var usesNativeEraserUndo = false
+    /// Pass the previous canvas's history when replacing a page's canvas so undo keeps working.
+    init(history: UndoManager = UndoManager()) {
+        historyUndoManager = history
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var undoManager: UndoManager? { usesNativeEraserUndo ? nativeEraserUndoManager : historyUndoManager }
     func clearNativeEraserHistory() { nativeEraserUndoManager.removeAllActions() }
     func setDrawingWithoutUndo(_ drawing: PKDrawing) {
@@ -930,45 +975,6 @@ final class PageCanvasView: PKCanvasView {
         self.drawing = drawing
         nativeEraserUndoManager.enableUndoRegistration()
         historyUndoManager.enableUndoRegistration()
-    }
-    /// Replaces the ink and forces PencilKit to redraw. After a programmatic replacement
-    /// (for example, while the AI popover holds focus), PencilKit can keep showing cached
-    /// tiles of removed strokes until the next touch.
-    func replaceRenderedInk(with drawing: PKDrawing) {
-        // Going through an empty drawing makes PencilKit drop every cached tile
-        // instead of diffing the stroke lists.
-        setDrawingWithoutUndo(PKDrawing())
-        layoutIfNeeded()
-        setDrawingWithoutUndo(drawing)
-        refreshRenderedInk()
-        // Tiles are rendered asynchronously, so repeat once the new drawing has been
-        // picked up, unless the user has already replaced it.
-        let expected = drawing.dataRepresentation()
-        for delay in [0.0, 0.15] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.window != nil,
-                      self.drawing.dataRepresentation() == expected else { return }
-                self.refreshRenderedInk()
-            }
-        }
-    }
-    /// A zoom round trip makes PencilKit re-tile. Each step needs its own layout pass;
-    /// two zoom changes in the same pass cancel out and nothing gets redrawn.
-    func refreshRenderedInk() {
-        func invalidate(_ view: UIView) {
-            view.setNeedsDisplay()
-            view.layer.setNeedsDisplay()
-            view.subviews.forEach(invalidate)
-        }
-        invalidate(self)
-        let zoom = zoomScale, offset = contentOffset
-        // Nudge toward the inside of the allowed range so the change isn't clamped away.
-        let nudged = zoom * 1.001 <= maximumZoomScale ? zoom * 1.001 : zoom * 0.999
-        setZoomScale(nudged, animated: false)
-        layoutIfNeeded()
-        setZoomScale(zoom, animated: false)
-        setContentOffset(offset, animated: false)
-        layoutIfNeeded()
     }
 }
 

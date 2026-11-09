@@ -399,11 +399,15 @@ final class DrawingCanvasTests: XCTestCase {
         var reportedShapes: [[NoteShape]] = []
         host.onShapesChange = { reportedShapes.append($0) }
 
+        let oldCanvas = host.canvas
         history.beginUndoGrouping()
         host.clearPage()
         history.endUndoGrouping()
         XCTAssertTrue(host.canvas.drawing.strokes.isEmpty)
         XCTAssertTrue(host.shapes.isEmpty)
+        XCTAssertFalse(host.canvas === oldCanvas, "Clearing swaps in a fresh canvas so no stale PencilKit tiles remain.")
+        XCTAssertNil(oldCanvas.superview)
+        XCTAssertTrue(host.canvas.undoManager === history, "The fresh canvas keeps the page's undo history.")
         XCTAssertEqual(reportedShapes.last, [], "Clearing must notify autosave of the removed shapes.")
 
         history.undo()
