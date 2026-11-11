@@ -2,7 +2,7 @@
 
 **A quiet place to write, sketch, and think.**
 
-DrawBook is a free, open-source notebook for iPad and iPhone. Write with a compatible stylus, sketch with native brushes, annotate PDFs, and keep your notebooks on your device. Built with SwiftUI, PencilKit, and PDFKit.
+DrawBook is a free, open-source notebook for iPad. Write with a compatible stylus, sketch with native brushes, annotate PDFs, and keep your notebooks on your device. Built with SwiftUI, PencilKit, and PDFKit.
 
 **MIT licensed · Offline notebooks · No DrawBook account · No ads · No third-party dependencies**
 
@@ -32,8 +32,8 @@ Native iPad simulator screenshots with fictional sample notebooks.
 
 ### Requirements
 
-- A Mac with **Xcode 26 or later** and the iOS platform installed. Use a version that supports your device's OS. This project uses the iOS 26 PencilKit SDK while supporting devices running **iOS/iPadOS 17 or later**.
-- An iPad or iPhone, or an installed iOS simulator.
+- A Mac with **Xcode 26 or later** and the iOS platform installed. Use a version that supports your device's OS. This project uses the iOS 26 PencilKit SDK and supports **iPadOS 17 or later**.
+- An iPad or an installed iPad simulator.
 - For installation on a physical device, your own Apple signing team and a unique Bundle Identifier. No Apple Account is needed for simulator builds.
 
 ### Build and run
@@ -61,16 +61,20 @@ Pressure, tilt, buttons, and palm rejection depend on your hardware. Touch drawi
 
 Drawing AI requires an internet connection, an API key for OpenRouter, Ollama Cloud, Claude (Anthropic), or OpenAI, and a model that supports tool calling. Notebook editing works offline.
 
-1. In the library, open **AI configuration** in the sidebar, select **OpenRouter**, **Ollama Cloud**, **Claude**, or **OpenAI**, enter that provider’s API key, and save. Default models: OpenRouter `openrouter/free`, Ollama Cloud `gpt-oss:120b`, Claude `claude-opus-5-5`, OpenAI `gpt-5`. Each provider has its own settings. Clear the active provider’s key and save to disable Drawing AI.
+1. In the library, open **AI configuration**, choose **OpenRouter**, **Ollama Cloud**, **Claude**, or **OpenAI**, and enter that provider’s API key. Tap **Activate** to review what DrawBook shares and check the provider’s privacy, data security, and charges under your plan. Tap **OK** to save and enable Drawing AI, or **Cancel** to close AI configuration without saving.
 2. Open a notebook and tap **Drawing AI** (the sparkles at the bottom right of the page). Try “Write ‘Project plan’ at the top,” “Draw an airplane in the top right,” or “Write ‘Buy milk’ with my pencil.” Drawing AI can create editable shapes and paths, typed text boxes, and PencilKit ink using the current brush, color, and width.
 3. To target a specific shape, path, or text box, select it in Shapes mode before opening Drawing AI. Try “Move this to the left” or “Delete this.”
 4. Use **New thread** to clear the conversation and keep the page edits. One **Undo** reverses all page edits from a completed AI turn, including changes to objects and ink.
 
+Default models: OpenRouter `openrouter/free`, Ollama Cloud `gpt-oss:120b`, Claude `claude-opus-5-5`, and OpenAI `gpt-5`.
+
+Permission applies to the selected provider, model, and page image setting. To use a different configuration, activate it first. In **AI configuration**, tap **Deactivate** for the active configuration to withdraw permission and keep its key. To delete a stored key, select its provider and tap **Remove Saved API Key**.
+
 ![Drawing AI chat showing a sample request to add two leaves and the edited page alongside it](docs/screenshots/drawing-ai.png)
 
-The iPad simulator preview shows the chat panel over the editor with a fictional conversation. The capture runs locally without contacting an AI provider.
+The iPad simulator preview shows the chat panel over the editor with a fictional conversation. It was captured locally without contacting an AI provider.
 
-**What gets shared.** When you tap **Send**, DrawBook sends your prompt, recent conversation, editable objects on the current page, and any tool results to the selected provider. The system prompt carries only a short page summary; the agent reads the full page with `get_page_state` when it needs it, which shares simplified stroke data and text recognized on your device by Apple Vision, so Drawing AI can read handwriting and edit ink by line, word, or stroke. It changes the page with `apply_patch` and empties it with `clear_page`. Provider API keys are stored in Keychain.
+**What gets shared.** When you tap **Send**, DrawBook sends your prompt, recent conversation, and a short page summary to the selected provider. If the agent reads the current page with `get_page_state`, the tool result also includes editable objects, simplified stroke data, and handwriting recognized on your device by Apple Vision. The agent changes the page with `apply_patch` and empties it with `clear_page`. Provider API keys are stored in Keychain.
 
 **Page images.** **Send Page as Image to AI** is off by default and saved separately per provider. If you enable it for a model with vision, the agent can request a 768 × 1024 JPEG of the current page with an optional coordinate grid. The image includes the paper, any imported PDF background, and editable objects. The image also includes your handwriting and sketches. Requests include up to two recent page images from the current turn. DrawBook drops the images from conversation history.
 

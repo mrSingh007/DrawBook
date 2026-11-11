@@ -197,6 +197,11 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
     private var gestureStartShapes: [NoteShape]?
     private var gestureStartPoint = CGPoint.zero
     private var gestureIsResize = false
+    /// Where the touch driving `editPan` went down. A pan is only recognized after the
+    /// touch has travelled, which can carry it off a small target like the resize handle.
+    private var editTouchStart: CGPoint?
+    /// A finger in Pencil mode is holding a shape, so it edits the shape instead of moving the page.
+    private var fingerHoldsShape = false
     private var laserTrails: [LaserTrail] = []
     private var laserTimer: Timer?
     var visibleLaserTrailCount: Int { laserTrails.count }
@@ -265,6 +270,7 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         canvas.contentSize = PageRenderer.pageSize
         canvas.alwaysBounceVertical = true
         canvas.panGestureRecognizer.addTarget(self, action: #selector(pagePanned(_:)))
+        canvas.blocksPagePan = { [weak self] in self?.fingerHoldsShape ?? false }
         canvas.accessibilityLabel = "Notebook drawing page"
         canvas.accessibilityHint = "Use the selected tool. Pinch to zoom. Drag with a finger in Pencil mode, or two fingers with Touch drawing, to move the page. Drag past the bottom or top edge to change pages. In Shapes mode, drag a shape to move it or its corner handle to resize it."
     }
@@ -315,21 +321,33 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
             clearLaserTrails()
             if mode != .shapes { select(nil) }
         }
-        canvas.drawingPolicy = fingerDrawing ? .anyInput : .pencilOnly
+        // SwiftUI calls this on every update, including while a shape is being dragged.
+        // Reassigning a recognizer's settings can reset a gesture in progress, so only
+        // write the values that actually differ.
+        func touchTypes(_ types: [UITouch.TouchType]) -> [NSNumber] { types.map { NSNumber(value: $0.rawValue) } }
+        func set<Root: AnyObject, Value: Equatable>(_ root: Root, _ path: ReferenceWritableKeyPath<Root, Value>, _ value: Value) {
+            if root[keyPath: path] != value { root[keyPath: path] = value }
+        }
+        set(canvas, \.drawingPolicy, fingerDrawing ? .anyInput : .pencilOnly)
         // In Pencil mode a finger drag moves the page (and pulls past an edge to turn it).
         // With Touch drawing one finger draws, so moving the page takes two fingers.
         // The pencil never pans: it always draws or edits.
-        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerDrawing ? 2 : 1
-        canvas.panGestureRecognizer.allowedTouchTypes = [UITouch.TouchType.direct, .indirectPointer].map { NSNumber(value: $0.rawValue) }
-        canvas.drawingGestureRecognizer.isEnabled = mode == .ink
-        eraserGesture.isEnabled = isErasing
-        canvas.isRulerActive = mode == .ink && (controller?.rulerActive ?? false)
-        editPan.isEnabled = mode != .ink
-        editTap.isEnabled = mode != .ink
-        let inputTypes = fingerDrawing ? [UITouch.TouchType.direct.rawValue, UITouch.TouchType.pencil.rawValue, UITouch.TouchType.indirectPointer.rawValue] : [UITouch.TouchType.pencil.rawValue]
-        editPan.allowedTouchTypes = inputTypes.map { NSNumber(value: $0) }
-        editTap.allowedTouchTypes = inputTypes.map { NSNumber(value: $0) }
-        eraserGesture.allowedTouchTypes = inputTypes.map { NSNumber(value: $0) }
+        set(canvas.panGestureRecognizer, \.minimumNumberOfTouches, fingerDrawing ? 2 : 1)
+        set(canvas.panGestureRecognizer, \.allowedTouchTypes, touchTypes([.direct, .indirectPointer]))
+        set(canvas.drawingGestureRecognizer, \.isEnabled, mode == .ink)
+        set(eraserGesture as UIGestureRecognizer, \.isEnabled, isErasing)
+        set(canvas, \.isRulerActive, mode == .ink && (controller?.rulerActive ?? false))
+        set(editPan, \.isEnabled, mode != .ink)
+        set(editTap, \.isEnabled, mode != .ink)
+        let allInputs = touchTypes([.direct, .pencil, .indirectPointer])
+        let inputTypes = fingerDrawing ? allInputs : touchTypes([.pencil])
+        // Shapes always respond to a finger. In Pencil mode `shouldReceive` limits finger
+        // drags to those that start on a shape, so a drag anywhere else still moves the page.
+        let editTypes = mode == .shapes ? allInputs : inputTypes
+        set(editPan, \.allowedTouchTypes, editTypes)
+        set(editTap, \.allowedTouchTypes, editTypes)
+        set(eraserGesture as UIGestureRecognizer, \.allowedTouchTypes, inputTypes)
+        if changed { fingerHoldsShape = false }
         if changed { focusCanvas() }
         overlay.setNeedsDisplay()
     }
@@ -659,7 +677,14 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         for shape in shapes.reversed() {
             if ShapeRenderer.hitTest(point, shape: shape, tolerance: 9 / canvas.zoomScale) { return shape }
         }
-        return nil
+        // Nothing painted here. An outline shape is still grabbed by its empty middle;
+        // the selected one wins so it can always be dragged by its dashed box.
+        func encloses(_ shape: NoteShape) -> Bool {
+            let enclosed = shape.kind == .rectangle || shape.kind == .ellipse || shape.kind == .triangle
+            return (enclosed || shape.id == selectedID) && selectionBounds(shape).contains(point)
+        }
+        if let selected = selectedShape, encloses(selected) { return selected }
+        return shapes.last(where: encloses)
     }
     private func selectionBounds(_ shape: NoteShape) -> CGRect { ShapeRenderer.path(for: shape).bounds }
     private func handlePoint(_ shape: NoteShape) -> CGPoint {
@@ -694,8 +719,10 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
         guard mode == .shapes else { return }
         switch gesture.state {
         case .began:
-            if let selected = selectedShape, isResizeHandle(point, shape: selected) { gestureIsResize = true }
-            else { select(shape(at: point)?.id); gestureIsResize = false }
+            let start = editTouchStart ?? point
+            editTouchStart = nil
+            if let selected = selectedShape, isResizeHandle(start, shape: selected) { gestureIsResize = true }
+            else { select((shape(at: start) ?? shape(at: point))?.id); gestureIsResize = false }
             guard selectedID != nil else { return }
             gestureStartPoint = point
             gestureStartShapes = shapes
@@ -734,6 +761,18 @@ final class PaperCanvasHost: UIView, PKCanvasViewDelegate, UIGestureRecognizerDe
             return true
         }
         return otherGestureRecognizer === canvas.panGestureRecognizer || otherGestureRecognizer === canvas.pinchGestureRecognizer
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === editPan else { return true }
+        let point = documentPoint(touch.location(in: self))
+        editTouchStart = point
+        fingerHoldsShape = false
+        guard mode == .shapes, !fingerDrawing, touch.type != .pencil else { return true }
+        fingerHoldsShape = holdsShape(at: point)
+        return fingerHoldsShape
+    }
+    func holdsShape(at point: CGPoint) -> Bool {
+        selectedShape.map { isResizeHandle(point, shape: $0) } == true || shape(at: point) != nil
     }
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === eraserGesture {
@@ -961,6 +1000,12 @@ final class PageCanvasView: PKCanvasView {
     let historyUndoManager: UndoManager
     private lazy var nativeEraserUndoManager = NativeEraserUndoManager(history: historyUndoManager)
     var usesNativeEraserUndo = false
+    /// True while a one-finger drag belongs to a shape, so the page must stay still.
+    var blocksPagePan: (() -> Bool)?
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === panGestureRecognizer, gestureRecognizer.numberOfTouches <= 1, blocksPagePan?() == true { return false }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
     /// Pass the previous canvas's history when replacing a page's canvas so undo keeps working.
     init(history: UndoManager = UndoManager()) {
         historyUndoManager = history

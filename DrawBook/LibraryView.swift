@@ -41,6 +41,7 @@ struct LibraryView: View {
                 VStack(spacing: 6) {
                     ForEach(LibraryFilter.allCases) { item in
                         Button {
+                            showingAISettings = false
                             filter = item
                             selection = nil
                             compactColumn = .detail
@@ -110,6 +111,9 @@ struct LibraryView: View {
                         library
                     }
                 }
+                .navigationDestination(isPresented: $showingAISettings) {
+                    AIConfigurationPage(settings: aiSettings)
+                }
             }
         }
         .onChange(of: selection) { _, notebookID in
@@ -121,9 +125,6 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showingHelp) { HelpSheet() }
-        .sheet(isPresented: $showingAISettings) {
-            AIConfigurationSheet(settings: aiSettings)
-        }
         .sheet(item: $shareFile) { ShareSheet(urls: $0.urls) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, UTType(exportedAs: "com.local.papernest.notebook")]) { result in
             switch result {
@@ -157,13 +158,16 @@ struct LibraryView: View {
     private var aiConfiguration: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AI").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(Theme.secondary)
-            Button { showingAISettings = true } label: {
+            Button {
+                compactColumn = .detail
+                showingAISettings = true
+            } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "sparkles")
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("AI configuration").font(.subheadline.weight(.medium))
-                        Text(aiSettings.isConfigured ? "\(aiSettings.provider.title) · \(aiSettings.model)" : "Choose an AI provider")
+                        Text(aiSettingsSummary)
                             .font(.caption).foregroundStyle(Theme.secondary)
                             .lineLimit(1)
                     }
@@ -178,6 +182,12 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var aiSettingsSummary: String {
+        if !aiSettings.isConfigured { return "Choose an AI provider" }
+        if !aiSettings.canUseChat { return "Drawing AI is off" }
+        return "\(aiSettings.provider.title) · \(aiSettings.model)"
     }
 
     private var library: some View {
@@ -283,14 +293,22 @@ struct LibraryView: View {
     }
 }
 
-private struct AIConfigurationSheet: View {
+private struct AIConfigurationPage: View {
+    private struct PendingActivation {
+        let scope: AISharingScope
+        let apiKey: String
+    }
+
     @Environment(\.dismiss) private var dismiss
-    let settings: AISettings
+    @ObservedObject var settings: AISettings
     @State private var provider: AIProvider
     @State private var apiKey: String
     @State private var model: String
     @State private var imageInput: Bool
-    @State private var saveError: String?
+    @State private var hasSavedAPIKey: Bool
+    @State private var pendingActivation: PendingActivation?
+    @State private var confirmingKeyRemoval = false
+    @State private var settingsError: String?
 
     init(settings: AISettings) {
         self.settings = settings
@@ -298,6 +316,7 @@ private struct AIConfigurationSheet: View {
         _apiKey = State(initialValue: settings.apiKey)
         _model = State(initialValue: settings.model)
         _imageInput = State(initialValue: settings.imageInput)
+        _hasSavedAPIKey = State(initialValue: settings.isConfigured)
     }
 
     private var providerSelection: Binding<AIProvider> {
@@ -305,86 +324,236 @@ private struct AIConfigurationSheet: View {
             guard provider != selected else { return }
             let configuration = settings.configuration(for: selected)
             apiKey = configuration.apiKey
-            model = configuration.model
-            imageInput = configuration.imageInput
-            saveError = nil
+            hasSavedAPIKey = !configuration.apiKey.isEmpty
+            model = configuration.scope.model
+            imageInput = configuration.scope.imageInput
+            settingsError = nil
             provider = selected
         })
     }
 
+    private var sharingScope: AISharingScope {
+        AISharingScope(provider: provider, model: model, imageInput: imageInput)
+    }
+
+    private var trimmedAPIKey: String { apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var draftMatchesSaved: Bool {
+        provider == settings.provider && sharingScope.model == settings.model &&
+        imageInput == settings.imageInput && trimmedAPIKey == settings.apiKey
+    }
+
+    private var isDraftActive: Bool { settings.canUseChat && draftMatchesSaved }
+
+    private var confirmingSharing: Binding<Bool> {
+        Binding(get: { pendingActivation != nil }, set: { if !$0 { pendingActivation = nil } })
+    }
+
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Provider", selection: providerSelection) {
-                        ForEach(AIProvider.allCases) { option in
-                            Text(option.title).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-
-                Section {
-                    SecureField("API key", text: $apiKey, prompt: Text("Enter your \(provider.title) API key"))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } header: {
-                    Text("\(provider.title) API key")
-                } footer: {
+        Form {
+            Section {
+                HStack(spacing: 16) {
+                    Image(systemName: "sparkles")
+                        .font(.title2)
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 52, height: 52)
+                        .background(.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 16))
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Drawing AI uses your provider account and may incur provider charges. Your key is stored in Keychain. Clear it and save to turn off AI chat.")
-                        Link("Get a \(provider.title) API key", destination: provider.keyURL)
+                        Text("Drawing AI").font(.system(.title2, design: .serif).weight(.semibold))
+                        Text("Ask your AI provider to read, draw, or edit the current page.")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.secondary)
+                    }
+                    .foregroundStyle(Theme.ink)
+                }
+                .padding(.vertical, 10)
+                .listRowBackground(Theme.sidebar)
+            }
+
+            Section {
+                Picker("Provider", selection: providerSelection) {
+                    ForEach(AIProvider.allCases) { option in
+                        Text(option.title).tag(option)
                     }
                 }
+                .pickerStyle(.menu)
+            }
 
-                Section {
-                    TextField("Model ID", text: $model, prompt: Text(provider.defaultModel))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if model != provider.defaultModel {
-                        Button("Use default model") { model = provider.defaultModel }
-                    }
-                } header: {
-                    Text("\(provider.title) model")
-                } footer: {
-                    Text("Default model: \(provider.defaultModel). You can enter another model ID supported by this provider.")
+            Section {
+                SecureField("API key", text: $apiKey, prompt: Text("Enter your \(provider.title) API key"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if hasSavedAPIKey {
+                    Button("Remove Saved API Key", role: .destructive) { confirmingKeyRemoval = true }
                 }
-
-                Section {
-                    Toggle(isOn: $imageInput) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Send Page as Image to AI")
-                            Text("Make sure your model supports image input (vision).")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } footer: {
-                    Text("Drawing AI can request an image of the current page, including the paper, any imported PDF, and your handwriting and sketches.")
-                }
-
-                if let saveError {
-                    Text(saveError).font(.callout).foregroundStyle(.red)
+            } header: {
+                Text("\(provider.title) API key")
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Drawing AI uses your provider account and may incur provider charges. Your key is stored in Keychain.")
+                    Link("Get a \(provider.title) API key", destination: provider.keyURL)
                 }
             }
-            .navigationTitle("AI configuration")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+
+            Section {
+                TextField("Model ID", text: $model, prompt: Text(provider.defaultModel))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if model != provider.defaultModel {
+                    Button("Use default model") { model = provider.defaultModel }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        do {
-                            try settings.save(provider: provider, apiKey: apiKey, model: model, imageInput: imageInput)
-                            dismiss()
-                        } catch {
-                            saveError = error.localizedDescription
-                        }
+            } header: {
+                Text("\(provider.title) model")
+            } footer: {
+                Text("Default model: \(provider.defaultModel). You can enter another model ID supported by this provider.")
+            }
+
+            Section {
+                Toggle(isOn: $imageInput) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Send Page as Image to AI")
+                        Text("Make sure your model supports image input (vision).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
+            } footer: {
+                Text("Drawing AI can request an image of the current page, including the paper, any imported PDF, and your handwriting and sketches.")
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { activationBar }
+        .navigationTitle("AI configuration")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden()
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(draftMatchesSaved ? "Done" : "Cancel") { dismiss() }
+            }
+        }
+        .alert("Activate Drawing AI?", isPresented: confirmingSharing, presenting: pendingActivation) { draft in
+            Button("Cancel", role: .cancel) { dismiss() }
+            Button("OK") { activate(draft) }
+        } message: { draft in
+            Text(sharingNotice(for: draft.scope))
+        }
+        .alert("Remove saved API key?", isPresented: $confirmingKeyRemoval) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive, action: removeAPIKey)
+        } message: {
+            Text("To use \(provider.title) again, enter an API key and activate it.")
+        }
+    }
+
+    private var activationBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) {
+                    activationStatus
+                    Spacer(minLength: 12)
+                    activationButton
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    activationStatus
+                    activationButton
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: 720)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+        }
+        .background(.regularMaterial)
+    }
+
+    private var activationStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isDraftActive {
+                Label("Active with \(provider.title)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Theme.accent)
+            } else if settings.canUseChat {
+                Label("Changes ready to review", systemImage: "slider.horizontal.3")
+                Text("Currently active with \(settings.provider.title).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("Drawing AI is off", systemImage: "power")
+            }
+            if let settingsError {
+                Text(settingsError).font(.caption).foregroundStyle(.red)
+            } else if trimmedAPIKey.isEmpty {
+                Text("Enter an API key to activate.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .font(.subheadline.weight(.semibold))
+    }
+
+    @ViewBuilder
+    private var activationButton: some View {
+        if isDraftActive {
+            Button("Deactivate", systemImage: "power", role: .destructive) {
+                settings.deactivate()
+                settingsError = nil
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        } else {
+            Button("Activate", systemImage: "sparkles", action: confirmActivation)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(trimmedAPIKey.isEmpty)
+        }
+    }
+
+    private func confirmActivation() {
+        do {
+            let scope = sharingScope
+            let key = try AISettings.validateActivation(apiKey: apiKey, scope: scope)
+            settingsError = nil
+            pendingActivation = PendingActivation(scope: scope, apiKey: key)
+        } catch {
+            settingsError = error.localizedDescription
+        }
+    }
+
+    private func activate(_ draft: PendingActivation) {
+        do {
+            try settings.activate(apiKey: draft.apiKey, scope: draft.scope)
+            apiKey = draft.apiKey
+            model = draft.scope.model
+            hasSavedAPIKey = true
+        } catch {
+            settingsError = error.localizedDescription
+        }
+    }
+
+    private func removeAPIKey() {
+        do {
+            try settings.removeAPIKey(for: provider)
+            apiKey = ""
+            hasSavedAPIKey = false
+            settingsError = nil
+        } catch {
+            settingsError = error.localizedDescription
+        }
+    }
+
+    private func sharingNotice(for scope: AISharingScope) -> String {
+        let provider = scope.provider
+        var notice = "\(provider.title) receives your prompt, recent chat, and a summary of the current page. The AI can read page drawings, typed text, and recognized handwriting."
+        if scope.imageInput {
+            notice += "\n\nPage images are on. The AI can receive an image of the page, including any imported PDF background."
+        } else {
+            notice += "\n\nPage images are off."
+        }
+        if provider == .openRouter {
+            notice += "\n\nOpenRouter may forward this data to the model provider. Review both providers’ privacy and data security practices and any charges under your OpenRouter plan."
+        } else {
+            notice += "\n\nReview \(provider.title)’s privacy and data security practices for your plan, including data retention, usage limits, and charges."
+        }
+        return notice
     }
 }
 
@@ -491,6 +660,8 @@ struct HelpSheet: View {
                     Link(destination: URL(string: "https://github.com/mrSingh007/DrawBook/blob/main/docs/PRIVACY.md")!) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
+                    Text("Drawing AI requires your permission in AI configuration. When you send a message, DrawBook shares your prompt, recent conversation, and a summary of the current page with your chosen AI provider. If the AI reads the page, DrawBook also shares typed text, shapes, handwriting recognized on your iPad, and simplified stroke data.")
+                    Text("If Send Page as Image to AI is on, the AI can also request an image of the page with your handwriting, sketches, and any imported PDF background. Your provider’s data handling and retention policies apply. You can withdraw permission in AI configuration.")
                 }
                 Section("Make yourself at home") {
                     Label("Handwrite, sketch, and annotate PDFs.", systemImage: "pencil.tip")
@@ -500,7 +671,7 @@ struct HelpSheet: View {
                 Section("Shapes") {
                     Text("Tap the Shapes tool to open its popup and add a rectangle, ellipse, triangle, line, or arrow. Tap a shape to select it, drag its body to move it, and drag the blue corner handle to resize it.")
                     Text("The color circle and size button style the selected shape. Tap the trash button to delete it. Open the Shapes popup to change type, fill, and rotation or duplicate it. Choose Eraser and adjust its diameter with the size button to rub out parts of ink or shapes. Erasing can be undone while the page is open and stays saved in notebook backups.")
-                    Text("Shape selection and dragging follow the same pencil/touch setting as drawing. Enable Touch drawing to manipulate shapes with a finger.")
+                    Text("Shapes respond to both the pencil and a finger. In Pencil mode, a finger drag that starts on a shape moves or resizes it; a drag anywhere else moves the page.")
                 }
                 Section("Temporary red laser") {
                     Text("Choose Laser to point or draw a glowing red trail. It fades and disappears three seconds after you lift the pen. Laser marks are never saved, included in backups, or added to PNG/PDF exports.")
@@ -512,7 +683,6 @@ struct HelpSheet: View {
                 }
                 Section("Storage and sharing") {
                     Text("Notebooks are stored inside this app and excluded from automatic device backup. You choose when to export and share a notebook.")
-                    Text("Optional Drawing AI sends your chat and editable content from the current page directly to your chosen provider. With handwriting sharing on, this includes recognized text and simplified strokes. With page images on, it can include a rendered image of an imported PDF page. Your provider’s data handling and retention settings apply.")
                     Text("Use Export editable backup to keep handwriting editable. PNG and PDF are for sharing and are flattened. Keep backups in On My iPad, an external drive, or another location you choose.")
                     Text("Deleting the app deletes its local notebooks. Export backups before deleting, changing signing identity, or reinstalling as a different app.")
                 }
