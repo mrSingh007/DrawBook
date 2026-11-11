@@ -98,6 +98,8 @@ DrawBook runs without a developer-operated backend. Optional AI requests go dire
 
 ## Development and verification
 
+[DrawBook CI](.github/workflows/ci.yml) builds the app and runs XCTest on a hosted iPad (A16) simulator when a pull request targeting `main` is opened or merged.
+
 ```sh
 # Validate project references, assets, plists, and Swift syntax.
 ./scripts/check-project.sh
