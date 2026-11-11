@@ -53,6 +53,58 @@ final class AIClientTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentDoesNotSendWithoutPermissionOrAfterRevocation() async {
+        for initiallyAllowed in [false, true] {
+            var allowed = initiallyAllowed
+            var requests = 0
+            do {
+                _ = try await AIClient.runAgent(
+                    provider: .openRouter, apiKey: "key", model: "model", system: "s", history: [], prompt: "Read this page",
+                    tools: tools,
+                    authorizeRequest: {
+                        guard allowed else { throw AIClient.Failure.sharingNotAllowed }
+                    },
+                    execute: { _ in
+                        allowed = false
+                        return AIToolOutcome(result: "Recognized handwriting", summary: "Read page")
+                    },
+                    send: { request in
+                        requests += 1
+                        let message = ["tool_calls": [["id": "read", "function": ["name": "get_page_state", "arguments": "{}"]]]]
+                        return try Self.response(["choices": [["message": message]]], url: XCTUnwrap(request.url))
+                    }
+                )
+                XCTFail("Expected the request to be denied")
+            } catch {
+                XCTAssertEqual(error as? AIClient.Failure, .sharingNotAllowed)
+            }
+            XCTAssertEqual(requests, initiallyAllowed ? 1 : 0)
+        }
+    }
+
+    @MainActor
+    func testAgentDiscardsFinalReplyIfPermissionIsRevokedInFlight() async {
+        var allowed = true
+        do {
+            _ = try await AIClient.runAgent(
+                provider: .openRouter, apiKey: "key", model: "model", system: "s", history: [], prompt: "Read this page",
+                tools: [], authorizeRequest: {
+                    guard allowed else { throw AIClient.Failure.sharingNotAllowed }
+                }, execute: { _ in
+                    XCTFail("No tool should run")
+                    return AIToolOutcome(result: "{}", summary: "Unused")
+                }, send: { request in
+                    allowed = false
+                    return try Self.response(["choices": [["message": ["content": "Done."]]]], url: XCTUnwrap(request.url))
+                }
+            )
+            XCTFail("Expected the reply to be discarded")
+        } catch {
+            XCTAssertEqual(error as? AIClient.Failure, .sharingNotAllowed)
+        }
+    }
+
+    @MainActor
     func testAgentLoopRunsToolsAndEchoesThemInProviderFormat() async throws {
         for provider in AIProvider.allCases {
             var requests: [[String: Any]] = []
@@ -61,6 +113,7 @@ final class AIClientTests: XCTestCase {
             let result = try await AIClient.runAgent(
                 provider: provider, apiKey: "key", model: "model", system: "You draw.",
                 history: [], prompt: "Add a box", tools: tools,
+                authorizeRequest: {},
                 onEvent: { events.append($0) },
                 execute: { call in
                     executed.append(call)
@@ -128,6 +181,7 @@ final class AIClientTests: XCTestCase {
         var round = 0
         _ = try await AIClient.runAgent(
             provider: .openRouter, apiKey: "key", model: "model", system: "s", history: [], prompt: "p", tools: tools,
+            authorizeRequest: {},
             execute: { call in received = call.arguments; return AIToolOutcome(result: "error: invalid JSON", summary: "Failed") }
         ) { request in
             round += 1
@@ -146,7 +200,7 @@ final class AIClientTests: XCTestCase {
         do {
             _ = try await AIClient.runAgent(
                 provider: .ollamaCloud, apiKey: "key", model: "model", system: "s", history: [], prompt: "p",
-                tools: tools, maxSteps: 3, execute: { _ in AIToolOutcome(result: "{}", summary: "ok") }
+                tools: tools, maxSteps: 3, authorizeRequest: {}, execute: { _ in AIToolOutcome(result: "{}", summary: "ok") }
             ) { request in
                 calls += 1
                 return try Self.response(["done": true, "message": [
@@ -221,7 +275,7 @@ final class AIClientTests: XCTestCase {
             do {
                 _ = try await AIClient.runAgent(
                     provider: .openRouter, apiKey: key, model: "model", system: "s", history: [], prompt: prompt,
-                    tools: tools, execute: { _ in AIToolOutcome(result: "", summary: "") }
+                    tools: tools, authorizeRequest: {}, execute: { _ in AIToolOutcome(result: "", summary: "") }
                 ) { _ in XCTFail("Should not send"); throw URLError(.badURL) }
                 XCTFail("Expected \(expected)")
             } catch {

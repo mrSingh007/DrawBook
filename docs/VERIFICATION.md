@@ -28,14 +28,7 @@ The initial release review took place on 7 November 2026 using Xcode 27.2, befor
 
 On 8 November 2026, all 106 current regression cases and the documentation screenshot test passed on the iPad (A16) simulator with iOS 27.2. The suite includes Drawing AI coverage for provider protocols, handwriting recognition, page tools, patch validation, and grouped undo.
 
-The screenshots are native SwiftUI view snapshots from an isolated temporary notebook store. To reproduce them, run
-
-```sh
-DRAWBOOK_TEST_DESTINATION='platform=iOS Simulator,name=iPad (A16)' \
-  ./scripts/capture-screenshots.sh
-```
-
-This creates a disposable project under `build/`, runs the screenshot test, and exports the library, editor, and Drawing AI screenshots to `docs/screenshots/`. The Drawing AI example uses a fictional conversation without a network request or saved API key.
+The library, editor, and Drawing AI screenshots in `docs/screenshots/` were captured from native SwiftUI views using an isolated notebook store. The Drawing AI example used a fictional conversation without a network request or saved API key.
 
 ## Remaining hardware checks
 

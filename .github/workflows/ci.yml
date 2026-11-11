@@ -1,0 +1,27 @@
+name: DrawBook CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test on iPad simulator
+    if: github.event.action == 'opened' || github.event.pull_request.merged == true
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build DrawBook and run XCTest
+        env:
+          DRAWBOOK_TEST_DESTINATION: 'platform=iOS Simulator,name=iPad (A16),OS=latest'
+        run: ./scripts/check-project.sh --test

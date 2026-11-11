@@ -71,7 +71,7 @@ struct NotebookEditor: View {
                     .id(page.id)
                     .accessibilityLabel("Drawing page \(pageIndex + 1)")
                     .overlay(alignment: .bottomTrailing) {
-                        if aiSettings.isConfigured { aiButton(pageID: page.id) }
+                        if aiSettings.canUseChat { aiButton(pageID: page.id) }
                     }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -116,10 +116,8 @@ struct NotebookEditor: View {
             if currentPageID == nil, let first = notebook?.pages.first { loadPage(first.id) }
         }
         .onDisappear { aiChat.cancel(); _ = flush() }
-        .onChange(of: aiSettings.provider) { _, _ in
-            showAIChat = false
-            aiChat.newThread()
-        }
+        .onChange(of: aiSettings.sharingConsent) { resetAIChat() }
+        .onChange(of: aiSettings.apiKey) { resetAIChat() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 canvasController.discardTransientMarks()
@@ -145,6 +143,11 @@ struct NotebookEditor: View {
         }
     }
 
+    private func resetAIChat() {
+        showAIChat = false
+        aiChat.newThread()
+    }
+
     private func aiButton(pageID: UUID) -> some View {
         Button {
             showAIChat = true
@@ -164,7 +167,7 @@ struct NotebookEditor: View {
             DrawingAIChatView(chat: aiChat, provider: aiSettings.provider,
                               model: aiSettings.model, imageInput: aiSettings.imageInput,
                               pageNumber: pageIndex + 1, pageCount: notebook?.pages.count ?? 1) {
-                guard currentPageID == pageID, pageLoadError == nil else { return }
+                guard aiSettings.canUseChat, currentPageID == pageID, pageLoadError == nil else { return }
                 guard flush() else {
                     aiChat.errorMessage = "Retry saving the page before asking AI to edit it."
                     return
@@ -175,9 +178,7 @@ struct NotebookEditor: View {
                                                 hasPDFBackground: page?.backgroundFile != nil,
                                                 pen: canvasController.currentInk,
                                                 backgroundURL: store.backgroundURL(notebookID: notebookID, pageID: pageID))
-                aiChat.send(provider: aiSettings.provider, apiKey: aiSettings.apiKey,
-                            model: aiSettings.model, page: original, info: info,
-                            imageInput: aiSettings.imageInput,
+                aiChat.send(settings: aiSettings, page: original, info: info,
                             selectedObjectID: canvasController.selectedShape?.id) { changed in
                     guard currentPageID == pageID,
                           canvasController.applyAIPage(changed, replacing: original, pageID: pageID) else {
@@ -326,8 +327,7 @@ struct NotebookEditor: View {
     }
 
     private func loadPage(_ id: UUID, entryPosition: PageEntryPosition = .top) {
-        showAIChat = false
-        aiChat.newThread()
+        resetAIChat()
         pageEntryPosition = entryPosition
         currentPageID = id
         do {

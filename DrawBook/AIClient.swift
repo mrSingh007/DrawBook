@@ -48,13 +48,14 @@ enum AIAgentEvent: Equatable {
 /// chat-completions format; Ollama Cloud uses its native chat API.
 enum AIClient {
     enum Failure: LocalizedError, Equatable {
-        case invalidSettings, promptTooLarge, invalidResponse, replyTooLong, tooManySteps
+        case invalidSettings, sharingNotAllowed, promptTooLarge, invalidResponse, replyTooLong, tooManySteps
         case toolsUnsupported(AIProvider), imagesUnsupported(AIProvider)
         case requestFailed(AIProvider, Int)
 
         var errorDescription: String? {
             switch self {
             case .invalidSettings: return "Enter an API key and model for your selected provider in Your Space."
+            case .sharingNotAllowed: return "Allow data sharing for your selected provider in AI configuration before using Drawing AI."
             case .promptTooLarge: return "The request is too long. Try describing one edit at a time."
             case .invalidResponse: return "The model did not return a usable reply. Try again or choose another model."
             case .replyTooLong: return "The model ran out of room to finish. Try a smaller edit or choose another model."
@@ -91,6 +92,7 @@ enum AIClient {
     static func runAgent(provider: AIProvider, apiKey: String, model: String,
                          system: String, history: [AIChatMessage], prompt: String,
                          tools: [AIToolDefinition], maxSteps: Int = 12,
+                         authorizeRequest: () throws -> Void,
                          onEvent: (AIAgentEvent) -> Void = { _ in },
                          execute: (AIToolCall) async -> AIToolOutcome,
                          send: Send = { try await URLSession.shared.data(for: $0) })
@@ -102,8 +104,12 @@ enum AIClient {
         let context = [AIChatMessage(role: .system, content: system)] + trimmedHistory(history)
         var turn = [AIChatMessage(role: .user, content: prompt)]
         for _ in 0..<maxSteps {
+            try Task.checkCancellation()
+            try authorizeRequest()
             let reply = try await complete(provider: provider, apiKey: apiKey, model: model,
                                            messages: context + turn, tools: tools, send: send)
+            try Task.checkCancellation()
+            try authorizeRequest()
             turn.append(reply)
             guard !reply.toolCalls.isEmpty else { return (reply.content, turn) }
             for call in reply.toolCalls {

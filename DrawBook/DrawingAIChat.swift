@@ -26,10 +26,10 @@ final class DrawingAIChat: ObservableObject {
 
     /// Runs one agent turn against a working copy of the page. `apply` commits the final
     /// page as a single undoable edit and reports whether it was saved.
-    func send(provider: AIProvider, apiKey: String, model: String, page: AIPageContent,
-              info: AIPageState.PageInfo, imageInput: Bool, selectedObjectID: UUID?,
+    func send(settings: AISettings, page: AIPageContent, info: AIPageState.PageInfo, selectedObjectID: UUID?,
               apply: @escaping (AIPageContent) -> ApplyResult) {
-        guard canSend, !apiKey.isEmpty else { return }
+        guard canSend, settings.canUseChat, let scope = settings.sharingConsent else { return }
+        let apiKey = settings.apiKey
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
         errorMessage = nil
@@ -48,11 +48,16 @@ final class DrawingAIChat: ObservableObject {
                     activity = [handwriting.isEmpty ? "No handwriting recognized" : "Recognized \(handwriting.count) handwritten line\(handwriting.count == 1 ? "" : "s")"]
                 }
                 let state = AIPageState(content: page, handwriting: handwriting, info: info,
-                                        keys: keys, selectedShapeID: selectedObjectID, imageInput: imageInput)
+                                        keys: keys, selectedShapeID: selectedObjectID, imageInput: scope.imageInput)
                 let system = state.systemPrompt()
                 let result = try await AIClient.runAgent(
-                    provider: provider, apiKey: apiKey, model: model, system: system,
-                    history: history, prompt: prompt, tools: AIPageState.tools(imageInput: imageInput),
+                    provider: scope.provider, apiKey: apiKey, model: scope.model, system: system,
+                    history: history, prompt: prompt, tools: AIPageState.tools(imageInput: scope.imageInput),
+                    authorizeRequest: {
+                        guard settings.sharingConsent == scope, settings.apiKey == apiKey else {
+                            throw AIClient.Failure.sharingNotAllowed
+                        }
+                    },
                     onEvent: { [weak self] event in
                         if case let .toolStarted(name) = event {
                             let label = switch name {

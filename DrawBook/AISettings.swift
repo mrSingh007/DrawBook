@@ -64,6 +64,8 @@ enum AIProvider: String, CaseIterable, Identifiable {
 
     fileprivate var imageInputPreference: String { rawValue + "ImageInput" }
 
+    fileprivate var sharingConsentPreference: String { rawValue + "SharingConsentV1" }
+
     fileprivate var keychainAccount: String {
         switch self {
         case .openRouter: return "openrouter-api-key"
@@ -74,6 +76,19 @@ enum AIProvider: String, CaseIterable, Identifiable {
     }
 }
 
+struct AISharingScope: Equatable {
+    let provider: AIProvider
+    let model: String
+    let imageInput: Bool
+
+    init(provider: AIProvider, model: String, imageInput: Bool) {
+        self.provider = provider
+        let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.model = modelID.isEmpty ? provider.defaultModel : modelID
+        self.imageInput = imageInput
+    }
+}
+
 @MainActor
 final class AISettings: ObservableObject {
     @Published private(set) var provider: AIProvider
@@ -81,43 +96,80 @@ final class AISettings: ObservableObject {
     @Published private(set) var model: String
     /// Whether the agent may render the current page as an image (needs a vision model).
     @Published private(set) var imageInput: Bool
+    @Published private(set) var sharingConsent: AISharingScope?
 
     private let defaults: UserDefaults
     private static let providerPreference = "drawingAIProvider"
 
     var isConfigured: Bool { !apiKey.isEmpty }
+    var canUseChat: Bool { isConfigured && sharingConsent != nil }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let provider = defaults.string(forKey: Self.providerPreference).flatMap(AIProvider.init(rawValue:)) ?? .openRouter
         self.provider = provider
-        model = defaults.string(forKey: provider.modelPreference) ?? provider.defaultModel
-        imageInput = defaults.bool(forKey: provider.imageInputPreference)
+        let scope = Self.savedScope(for: provider, in: defaults)
+        model = scope.model
+        imageInput = scope.imageInput
         apiKey = Self.loadKey(for: provider)
+        sharingConsent = Self.savedConsent(for: scope, in: defaults)
     }
 
-    func configuration(for provider: AIProvider) -> (apiKey: String, model: String, imageInput: Bool) {
-        if provider == self.provider { return (apiKey, model, imageInput) }
-        return (Self.loadKey(for: provider), defaults.string(forKey: provider.modelPreference) ?? provider.defaultModel,
-                defaults.bool(forKey: provider.imageInputPreference))
+    func configuration(for provider: AIProvider) -> (apiKey: String, scope: AISharingScope) {
+        let scope = Self.savedScope(for: provider, in: defaults)
+        let key = provider == self.provider ? apiKey : Self.loadKey(for: provider)
+        return (key, scope)
     }
 
-    func save(provider: AIProvider, apiKey: String, model: String, imageInput: Bool = false) throws {
+    func deactivate() {
+        defaults.removeObject(forKey: provider.sharingConsentPreference)
+        sharingConsent = nil
+    }
+
+    func removeAPIKey(for provider: AIProvider) throws {
+        try Self.saveKey("", for: provider)
+        defaults.removeObject(forKey: provider.sharingConsentPreference)
+        if self.provider == provider {
+            sharingConsent = nil
+            apiKey = ""
+        }
+    }
+
+    static func validateActivation(apiKey: String, scope: AISharingScope) throws -> String {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !modelID.contains(where: { $0.isWhitespace }) else { throw SettingsError.invalidModel(provider) }
-        guard !key.contains(where: { $0.isWhitespace }) else { throw SettingsError.invalidKey(provider) }
+        guard !key.isEmpty else { throw SettingsError.missingKey(scope.provider) }
+        guard !scope.model.contains(where: { $0.isWhitespace }) else { throw SettingsError.invalidModel(scope.provider) }
+        guard !key.contains(where: { $0.isWhitespace }) else { throw SettingsError.invalidKey(scope.provider) }
+        return key
+    }
 
+    func activate(apiKey: String, scope: AISharingScope) throws {
+        let provider = scope.provider
+        let key = try Self.validateActivation(apiKey: apiKey, scope: scope)
         let previousKey = provider == self.provider ? self.apiKey : Self.loadKey(for: provider)
         if key != previousKey { try Self.saveKey(key, for: provider) }
-        let activeModel = modelID.isEmpty ? provider.defaultModel : modelID
-        defaults.set(activeModel, forKey: provider.modelPreference)
-        defaults.set(imageInput, forKey: provider.imageInputPreference)
+        if provider != self.provider { deactivate() }
+        defaults.set(scope.model, forKey: provider.modelPreference)
+        defaults.set(scope.imageInput, forKey: provider.imageInputPreference)
+        defaults.set(["model": scope.model, "imageInput": scope.imageInput], forKey: provider.sharingConsentPreference)
         defaults.set(provider.rawValue, forKey: Self.providerPreference)
         self.apiKey = key
-        self.imageInput = imageInput
-        self.model = activeModel
+        self.imageInput = scope.imageInput
+        self.model = scope.model
         self.provider = provider
+        self.sharingConsent = scope
+    }
+
+    private static func savedScope(for provider: AIProvider, in defaults: UserDefaults) -> AISharingScope {
+        AISharingScope(provider: provider, model: defaults.string(forKey: provider.modelPreference) ?? provider.defaultModel,
+                       imageInput: defaults.bool(forKey: provider.imageInputPreference))
+    }
+
+    private static func savedConsent(for scope: AISharingScope, in defaults: UserDefaults) -> AISharingScope? {
+        let consent = defaults.dictionary(forKey: scope.provider.sharingConsentPreference)
+        guard consent?["model"] as? String == scope.model,
+              consent?["imageInput"] as? Bool == scope.imageInput else { return nil }
+        return scope
     }
 
     private static func keychainItem(for provider: AIProvider) -> [String: Any] {
@@ -160,10 +212,11 @@ final class AISettings: ObservableObject {
     }
 
     private enum SettingsError: LocalizedError {
-        case invalidKey(AIProvider), invalidModel(AIProvider), keychain(AIProvider)
+        case missingKey(AIProvider), invalidKey(AIProvider), invalidModel(AIProvider), keychain(AIProvider)
 
         var errorDescription: String? {
             switch self {
+            case .missingKey(let provider): return "Enter a \(provider.title) API key to activate Drawing AI."
             case .invalidKey(let provider): return "The \(provider.title) API key must be one line with no spaces."
             case .invalidModel(let provider): return "Enter a \(provider.title) model ID with no spaces."
             case .keychain(let provider): return "DrawBook couldn’t update the \(provider.title) API key in Keychain."

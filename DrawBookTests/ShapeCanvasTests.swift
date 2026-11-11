@@ -609,6 +609,24 @@ final class ShapeCanvasTests: XCTestCase {
     }
 
     @MainActor
+    func testFingerCanEditShapesInPencilMode() {
+        let shape = NoteShape(kind: .rectangle, frame: CGRect(x: 100, y: 100, width: 100, height: 100), filled: true)
+        let host = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil, shapes: [shape])
+        let finger = NSNumber(value: UITouch.TouchType.direct.rawValue)
+        let pan = host.canvas.gestureRecognizers?.compactMap { $0 as? UIPanGestureRecognizer }
+            .first { $0 !== host.canvas.panGestureRecognizer && $0.delegate === host }
+        host.configure(mode: .shapes, fingerDrawing: false)
+        XCTAssertEqual(pan?.allowedTouchTypes.contains(finger), true, "A finger must be able to move and resize shapes")
+        XCTAssertTrue(host.holdsShape(at: CGPoint(x: 150, y: 150)))
+        let outline = NoteShape(kind: .ellipse, frame: CGRect(x: 300, y: 600, width: 180, height: 130))
+        host.setShapes([shape, outline])
+        XCTAssertTrue(host.holdsShape(at: CGPoint(x: 390, y: 665)), "An outline shape can be dragged by its empty middle")
+        XCTAssertFalse(host.holdsShape(at: CGPoint(x: 400, y: 400)), "A finger away from shapes still moves the page")
+        host.configure(mode: .laser, fingerDrawing: false)
+        XCTAssertEqual(pan?.allowedTouchTypes.contains(finger), false, "The laser keeps following the pencil setting")
+    }
+
+    @MainActor
     func testOneFingerDragMovesPageOnlyInPencilMode() {
         let host = PaperCanvasHost(pageID: UUID(), drawing: PKDrawing(), paper: .blank, backgroundURL: nil)
         host.configure(mode: .ink, fingerDrawing: false)
