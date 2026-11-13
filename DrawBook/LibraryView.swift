@@ -657,7 +657,7 @@ struct HelpSheet: View {
         NavigationStack {
             List {
                 Section("Privacy") {
-                    Link(destination: URL(string: "https://github.com/mrSingh007/DrawBook/blob/main/docs/PRIVACY.md")!) {
+                    Link(destination: URL(string: "https://kevin-damiani.de/en/#privacy-drawbook")!) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
                     Text("Drawing AI requires your permission in AI configuration. When you send a message, DrawBook shares your prompt, recent conversation, and a summary of the current page with your chosen AI provider. If the AI reads the page, DrawBook also shares typed text, shapes, handwriting recognized on your iPad, and simplified stroke data.")

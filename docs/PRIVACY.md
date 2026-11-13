@@ -31,4 +31,4 @@ The selected provider and any downstream model provider handle the data under th
 
 ## Privacy questions
 
-Contact the project through [DrawBook’s GitHub issue tracker](https://github.com/mrSingh007/DrawBook/issues). Issues are public. For a sensitive question, ask for a private contact route and leave out personal information, notebook content, and API keys.
+The privacy policy of the App Store version names the controller and how to reach them: [DrawBook privacy policy](https://kevin-damiani.de/en/#privacy-drawbook). Please send privacy questions there and not to the public issue tracker.
