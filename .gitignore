@@ -23,3 +23,7 @@ xcuserdata/
 # Personal notebook content and exports
 *.drawing
 *.papernest
+
+# Python bytecode from scripts
+__pycache__/
+*.pyc

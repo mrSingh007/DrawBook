@@ -125,7 +125,7 @@ The XCTest suite covers persistence, failed-write recovery, malformed imports, c
 
 ### Known limits
 
-- This is a source distribution, not an App Store download or a signed installable IPA.
+- This repository is the source code. It does not ship a signed installable IPA; to build your own copy, follow the steps above with your own team and Bundle Identifier.
 - Pages use a fixed 768 × 1024 document canvas. Imported PDFs keep their proportions, with margins where needed.
 - Undo history lasts while a page is open. PNG and PDF exports cannot restore editable ink.
 - No library-wide text/OCR search, cloud sync, audio recording, or collaboration. Handwriting recognition runs on-device only for the page you ask Drawing AI about.
